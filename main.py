@@ -15,6 +15,4 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
 
     print("B7A BOT is running on Telegram...")
-   app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-
-
+    app.run_polling()

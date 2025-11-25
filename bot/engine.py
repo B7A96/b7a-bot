@@ -4,9 +4,9 @@ from typing import Dict, Any, List, Tuple
 import numpy as np
 import requests
 
-
 BINANCE_BASE_URL = "https://api.binance.com"
-# Timeframes we will use in the Ultra Engine
+
+# الفريمات اللي نستخدمها في التحليل
 TIMEFRAMES = {
     "15m": "15m",
     "1h": "1h",
@@ -60,7 +60,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
 
 
 # =========================
-# Indicator calculations
+# Indicators
 # =========================
 
 def ema(series: np.ndarray, period: int) -> np.ndarray:
@@ -118,7 +118,7 @@ def bollinger_bands(series: np.ndarray, period: int = 20, num_std: float = 2.0) 
         if i < period - 1:
             rolling_std.append(np.nan)
         else:
-            window = series[i - period + 1 : i + 1]
+            window = series[i - period + 1: i + 1]
             rolling_std.append(np.std(window))
     rolling_std = np.array(rolling_std)
     upper = padded_sma + num_std * rolling_std
@@ -137,7 +137,7 @@ def volume_surge(volume: np.ndarray, lookback: int = 20, threshold: float = 2.0)
     if volume.size < lookback + 1:
         return False
     recent = volume[-1]
-    avg_prev = volume[-(lookback + 1) : -1].mean()
+    avg_prev = volume[-(lookback + 1): -1].mean()
     return recent > threshold * avg_prev
 
 
@@ -148,7 +148,7 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
 
 
 # =========================
-# Scoring & decision engine
+# تحليل كل فريم
 # =========================
 
 def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
@@ -193,7 +193,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     change_1 = price_change(close, 1)
     change_4 = price_change(close, 4)
 
-    # Trend detection
     bullish_points = 0
     bearish_points = 0
 
@@ -211,7 +210,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         elif rsi_last > 70:
             bearish_points += 1  # overbought
         elif rsi_last < 30:
-            bullish_points += 1  # oversold bounce potential
+            bullish_points += 1  # oversold
 
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
@@ -221,14 +220,13 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     if not np.isnan(lower_last) and not np.isnan(upper_last):
         if last_close <= lower_last:
-            bullish_points += 1  # near lower band -> possible bounce
+            bullish_points += 1
         elif last_close >= upper_last:
-            bearish_points += 1  # extended move
+            bearish_points += 1
 
     trend_score = (bullish_points - bearish_points) * 10 + 50
     trend_score = max(0, min(100, trend_score))
 
-    # Pump & dump style risk (very simple heuristic)
     pump_dump_risk = "LOW"
     if abs(change_1) > 3 and vol_surge:
         pump_dump_risk = "MEDIUM"
@@ -263,6 +261,10 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     return info
 
 
+# =========================
+# دمج الفريمات واتخاذ القرار
+# =========================
+
 def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     weights = {
         "15m": 0.2,
@@ -280,15 +282,14 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     for tf, data in tf_data.items():
         w = weights.get(tf, 0.0)
-        score += data["trend_score"] * w
+        score += data.get("trend_score", 50) * w
         total_weight += w
 
-        if data["trend"] == "BULLISH":
+        if data.get("trend") == "BULLISH":
             bullish_votes += w
-        elif data["trend"] == "BEARISH":
+        elif data.get("trend") == "BEARISH":
             bearish_votes += w
 
-        # Pump/dump aggregation
         risk = data.get("pump_dump_risk", "LOW")
         if risk == "HIGH":
             max_pump_risk = "HIGH"
@@ -305,12 +306,23 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         global_trend = "RANGING"
 
-    if score >= 70 and max_pump_risk != "HIGH":
+    rsi_1h = tf_data.get("1h", {}).get("rsi")
+    rsi_4h = tf_data.get("4h", {}).get("rsi")
+
+    overbought = any(
+        r is not None and not np.isnan(r) and r > 70 for r in [rsi_1h, rsi_4h]
+    )
+    oversold = any(
+        r is not None and not np.isnan(r) and r < 30 for r in [rsi_1h, rsi_4h]
+    )
+
+    # منطقة عدم التداول
+    action = "WAIT"
+
+    if score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
         action = "BUY"
-    elif score <= 30:
+    elif score <= 30 and bearish_votes > bullish_votes and not oversold:
         action = "SELL"
-    else:
-        action = "WAIT"
 
     distance = abs(score - 50)
     if distance > 25:
@@ -321,7 +333,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         confidence = "LOW"
 
     if max_pump_risk == "HIGH" and action == "BUY":
-        # Override: strong warning against buying into a potential pump
         action = "WAIT"
 
     return {
@@ -333,11 +344,14 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# =========================
+# نقطة الدخول الرئيسية
+# =========================
+
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
-    Main Ultra Engine entrypoint.
-
-    Returns a dict ready to be formatted by the Telegram layer.
+    Ultra Engine:
+    يرجع قرار BUY / SELL / WAIT + تفاصيل للتحليل.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
@@ -347,7 +361,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
-            time.sleep(0.1)  # be gentle with Binance
+            time.sleep(0.1)  # نرفق ببينانس شوي
         except Exception as e:
             tf_results[name] = {
                 "timeframe": name,
@@ -361,13 +375,34 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
 
+    # حساب TP / SL بسيط كنسبة من السعر
+    tp = None
+    sl = None
+    if last_close is not None:
+        price = float(last_close)
+        # نسبة مخاطرة/ربح تقريبية (تقدر نعدلها لاحقاً)
+        risk_pct = 0.02   # 2%
+        reward_pct = 0.04 # 4%
+
+        if combined["action"] == "BUY":
+            sl = price * (1 - risk_pct)
+            tp = price * (1 + reward_pct)
+        elif combined["action"] == "SELL":
+            sl = price * (1 + risk_pct)
+            tp = price * (1 - reward_pct)
+
     reason_lines: List[str] = []
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
-    reason_lines.append(f"أقوى الفريمات: " + ", ".join(
-        tf for tf, d in tf_results.items() if d.get("trend_score", 50) >= combined["score"]
-    ))
+    strong_tfs = [
+        tf for tf, d in tf_results.items()
+        if d.get("trend_score", 50) >= combined["score"]
+    ]
+    if strong_tfs:
+        reason_lines.append("أقوى الفريمات: " + ", ".join(strong_tfs))
     if combined["pump_dump_risk"] != "LOW":
-        reason_lines.append(f"تنبيه: احتمالية Pump/Dump = {combined['pump_dump_risk']} (حذر مع الدخول).")
+        reason_lines.append(
+            f"تنبيه: احتمالية Pump/Dump = {combined['pump_dump_risk']} (حذر مع الدخول)."
+        )
 
     explanation = " | ".join(reason_lines)
 
@@ -376,5 +411,11 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "last_price": float(last_close) if last_close is not None else None,
         "timeframes": tf_results,
         "decision": combined,
+        "side": combined["action"],
+        "tp": tp,
+        "sl": sl,
+        "confidence": combined["confidence"],
+        "trend": combined["trend"],
+        "pump_dump_risk": combined["pump_dump_risk"],
         "reason": explanation,
     }

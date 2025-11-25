@@ -416,19 +416,20 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
-    Ultra Engine:
-    يرجع قرار BUY / SELL / WAIT + تفاصيل التحليل + TP/SL بنمط Auto Mode.
+    Main Ultra Engine entrypoint.
+
+    Returns a dict ready to be formatted by the Telegram layer.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
-    # نجمع بيانات كل الفريمات
+    # 1) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
-            time.sleep(0.1)  # نرفق ببينانس شوي
+            time.sleep(0.1)  # نرفق شوي على Binance
         except Exception as e:
             tf_results[name] = {
                 "timeframe": name,
@@ -438,48 +439,67 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # نجمع الفريمات في قرار واحد
+    # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
+    # نحاول نستخدم إغلاق فريم 1h كسعر مرجعي، وإذا مو موجود نرجع لفريم 15m
     last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
 
-    action = combined.get("action", "WAIT")
+    # 3) توليد TP / SL بناءً على السعر والسكور والثقة
     tp = None
     sl = None
-    profile = "NO_TRADE"
+    rr = None  # Risk/Reward
+    risk_pct = None
+    reward_pct = None
 
-    if last_close is not None and action in ("BUY", "SELL"):
+    if last_close is not None:
         price = float(last_close)
 
-        # نختار نسب المخاطرة والربح حسب Auto Mode
-        risk_info = choose_risk_reward(combined, tf_results)
-        risk_pct = risk_info["risk_pct"]
-        reward_pct = risk_info["reward_pct"]
+        # نسبة المخاطرة الأساسية حسب درجة الثقة
+        if combined["confidence"] == "HIGH":
+            risk_pct = 2.0
+        elif combined["confidence"] == "MEDIUM":
+            risk_pct = 1.5
+        else:
+            risk_pct = 1.0
 
-        profile = "AUTO_STRONG" if combined.get("confidence") == "HIGH" else "AUTO_NORMAL"
+        # مضاعف الهدف حسب السكور
+        if combined["score"] >= 75:
+            reward_mult = 2.5
+        elif combined["score"] >= 65:
+            reward_mult = 2.0
+        else:
+            reward_mult = 1.5
+
+        reward_pct = risk_pct * reward_mult
+
+        action = combined["action"]
 
         if action == "BUY":
-            sl = price * (1 - risk_pct)
-            tp = price * (1 + reward_pct)
+            sl = round(price * (1 - risk_pct / 100), 4)
+            tp = round(price * (1 + reward_pct / 100), 4)
         elif action == "SELL":
-            sl = price * (1 + risk_pct)
-            tp = price * (1 - reward_pct)
+            sl = round(price * (1 + risk_pct / 100), 4)
+            tp = round(price * (1 - reward_pct / 100), 4)
 
-    # نص السبب/الشرح
+        # حساب نسبة العائد للمخاطرة
+        if tp is not None and sl is not None and price != sl:
+            rr = round(abs((tp - price) / (price - sl)), 2)
+
+    # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
-    strong_tfs = [
-        tf for tf, d in tf_results.items()
-        if d.get("trend_score", 50) >= combined["score"]
-    ]
-    if strong_tfs:
-        reason_lines.append("أقوى الفريمات: " + ", ".join(strong_tfs))
+    reason_lines.append(
+        "أقوى الفريمات: "
+        + ", ".join(
+            tf for tf, d in tf_results.items()
+            if d.get("trend_score", 50) >= combined["score"]
+        )
+    )
     if combined["pump_dump_risk"] != "LOW":
         reason_lines.append(
-            f"تنبيه: احتمالية Pump/Dump = {combined['pump_dump_risk']} (حذر مع الدخول)."
+            f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
-    if action == "WAIT":
-        reason_lines.append("النظام يرى أن الفرصة حالياً غير مثالية للدخول (وضع انتظار).")
 
     explanation = " | ".join(reason_lines)
 
@@ -488,12 +508,11 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "last_price": float(last_close) if last_close is not None else None,
         "timeframes": tf_results,
         "decision": combined,
-        "side": action,
+        "reason": explanation,
+        # خطة الصفقة
         "tp": tp,
         "sl": sl,
-        "risk_profile": profile,
-        "confidence": combined["confidence"],
-        "trend": combined["trend"],
-        "pump_dump_risk": combined["pump_dump_risk"],
-        "reason": explanation,
+        "rr": rr,
+        "risk_pct": risk_pct,
+        "reward_pct": reward_pct,
     }

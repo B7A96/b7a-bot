@@ -146,6 +146,29 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
         return 0.0
     return (series[-1] - series[-period - 1]) / series[-period - 1] * 100.0
 
+def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+    """
+    Average True Range لقياس تذبذب السعر.
+    نستخدمه لحساب وقف الخسارة والأهداف.
+    """
+    if len(close) < period + 1:
+        raise ValueError("Not enough data for ATR")
+
+    tr = np.zeros_like(close)
+    tr[0] = high[0] - low[0]
+    for i in range(1, len(close)):
+        high_low = high[i] - low[i]
+        high_close_prev = abs(high[i] - close[i - 1])
+        low_close_prev = abs(low[i] - close[i - 1])
+        tr[i] = max(high_low, high_close_prev, low_close_prev)
+
+    atr_values = np.zeros_like(close)
+    atr_values[period - 1] = tr[:period].mean()
+
+    for i in range(period, len(close)):
+        atr_values[i] = (atr_values[i - 1] * (period - 1) + tr[i]) / period
+
+    return atr_values
 
 # =========================
 # تحليل كل فريم

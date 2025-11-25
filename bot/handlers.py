@@ -2,22 +2,23 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from .engine import generate_signal
-
 from bot.market import get_price
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔥 B7A Trading Bot is LIVE! 🔥")
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-🤖 قائمة الأوامر:
 
-/start – تشغيل البوت
-/help – عرض هذه القائمة
-/price BTC – سعر العملة
-/signal – إشارة تجريبية
-"""
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 قائمة الأوامر:\n\n"
+        "/start – تشغيل البوت\n"
+        "/help – عرض هذه القائمة\n"
+        "/price BTC – سعر العملة (سبوت)\n"
+        "/signal BTC – إشارة تحليل احترافية من Ultra Engine\n"
+    )
     await update.message.reply_text(text)
+
 
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -25,15 +26,15 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     symbol = context.args[0].upper()
-    price = get_price(symbol)
+    price_value = get_price(symbol)
 
-    if price:
-        await update.message.reply_text(f"💵 سعر {symbol}: {price} USDT")
+    if price_value:
+        await update.message.reply_text(f"💵 سعر {symbol}: {price_value} USDT")
     else:
         await update.message.reply_text("صار خطأ غير متوقع أثناء جلب السعر 😢")
 
+
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1) نجيب العملة من رسالة المستخدم
     # مثال: /signal BTC
     if len(context.args) == 0:
         await update.message.reply_text(
@@ -46,37 +47,48 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()
 
-    # 2) نجيب السعر الحالي من Binance
-    price = get_price(symbol)
-    if price is None:
-        await update.message.reply_text(
-            f"⚠️ ما قدرت أجيب سعر {symbol} من Binance حالياً."
+    # رسالة مبدئية
+    await update.message.reply_text("⏳ جاري تحليل السوق باستخدام B7A Ultra Engine...")
+
+    try:
+        data = generate_signal(symbol)   # ✅ الآن ياخذ رمز واحد فقط
+
+        decision = data["decision"]
+        price_value = data.get("last_price")
+        reason = data.get("reason", "")
+        tfs = data.get("timeframes", {})
+
+        # نحاول نبرز أهم الفريمات (1h و 4h مثلاً)
+        tf_summary_lines = []
+        for tf in ["15m", "1h", "4h", "1d"]:
+            d = tfs.get(tf)
+            if not d:
+                continue
+            tf_summary_lines.append(
+                f"• {tf}: ترند {d.get('trend', 'N/A')} | سكور {int(d.get('trend_score', 50))}"
+            )
+        tf_summary = "\n".join(tf_summary_lines) if tf_summary_lines else "ما توفرت بيانات كافية من Binance."
+
+        text = (
+            f"📊 *B7A Ultra Signal*\n"
+            f"العملة: *{symbol}*\n\n"
         )
-        return
 
-    # 3) نولّد إشارة من المحرك الذكي
-    signal_data = generate_signal(symbol, price)
+        if price_value is not None:
+            text += f"السعر الحالي: `{price_value}` USDT\n\n"
 
-    # تتوقع أن generate_signal يرجّع dict مثلاً:
-    # {"side": "BUY" أو "SELL", "tp": ..., "sl": ..., "reason": "نص التحليل"}
-    side   = signal_data.get("side", "N/A")
-    tp     = signal_data.get("tp")
-    sl     = signal_data.get("sl")
-    reason = signal_data.get("reason", "")
+        text += (
+            f"الاتجاه العام: *{decision['trend']}*\n"
+            f"الإجراء المقترح: *{decision['action']}*\n"
+            f"درجة الثقة: *{decision['confidence']}*\n"
+            f"مخاطر Pump/Dump: *{decision['pump_dump_risk']}*\n\n"
+            f"🕒 ملخص الفريمات:\n{tf_summary}\n\n"
+        )
 
-    # 4) نرسل النتيجة للمستخدم
-    msg = (
-        f"📊 إشارة {symbol} من B7A Ultra Bot\n\n"
-        f"السعر الحالي: {price:.4f} USDT\n"
-        f"الإتجاه: {side}\n"
-    )
+        if reason:
+            text += f"📌 سبب الإشارة:\n{reason}"
 
-    if tp is not None:
-        msg += f"🎯 هدف الربح (TP): {tp}\n"
-    if sl is not None:
-        msg += f"🛡 وقف الخسارة (SL): {sl}\n"
+        await update.message.reply_text(text, parse_mode="Markdown")
 
-    if reason:
-        msg += "\n📌 سبب الإشارة:\n" + reason
-
-    await update.message.reply_text(msg)
+    except Exception as e:
+        await update.message.reply_text(f"❌ فشل أثناء التحليل: {str(e)}")

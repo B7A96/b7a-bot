@@ -473,20 +473,20 @@ def build_trade_levels(last_close: float,
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
-    Main Ultra Engine entrypoint.
-
-    Returns a dict ready to be formatted by the Telegram layer.
+    نقطة الدخول الرئيسية لـ B7A Ultra Engine.
+    ترجع ديكشنري جاهز للعرض في تيليجرام.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
-    # 1) نجيب بيانات كل الفريمات
+    # 1) جلب بيانات الفريمات + التحليل
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
+            tf_info["ohlcv"] = ohlcv  # نحتفظ بالشموع لاستخدام ATR لاحقاً
             tf_results[name] = tf_info
-            time.sleep(0.1)  # نرفق شوي على Binance
+            time.sleep(0.1)
         except Exception as e:
             tf_results[name] = {
                 "timeframe": name,
@@ -496,63 +496,56 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 2) ندمج الفريمات في قرار واحد
+    # 2) قرار عام من دمج الفريمات
     combined = combine_timeframes(tf_results)
 
-    # نحاول نستخدم إغلاق فريم 1h كسعر مرجعي، وإذا مو موجود نرجع لفريم 15m
-    last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
+    # نختار فريم أساس نشتغل عليه في حساب الـ ATR (الأولوية 1h ثم 4h ثم 15m)
+    base_tf_name = None
+    if "1h" in tf_results:
+        base_tf_name = "1h"
+    elif "4h" in tf_results:
+        base_tf_name = "4h"
+    elif "15m" in tf_results:
+        base_tf_name = "15m"
 
-    # 3) توليد TP / SL بناءً على السعر والسكور والثقة
-    tp = None
-    sl = None
-    rr = None  # Risk/Reward
+    last_close = None
+    if base_tf_name:
+        last_close = tf_results[base_tf_name].get("close")
+    else:
+        # احتياط لو ما توفر أي فريم (المفروض نادراً يصير)
+        last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
+
+    # 3) حساب مستويات الصفقة ATR-Based + نسبة المخاطرة/الربح
+    trade_levels: Dict[str, float] = {}
     risk_pct = None
     reward_pct = None
+    rr = None  # Risk/Reward ratio
 
-    if last_close is not None:
-        price = float(last_close)
+    if last_close is not None and combined["action"] in ("BUY", "SELL") and base_tf_name:
+        ohlcv_base = tf_results[base_tf_name].get("ohlcv")
+        if ohlcv_base:
+            # SL / TP1 / TP2 من ATR
+            trade_levels = build_trade_levels(float(last_close), ohlcv_base, combined["action"])
 
-        # نسبة المخاطرة الأساسية حسب درجة الثقة
-        if combined["confidence"] == "HIGH":
-            risk_pct = 2.0
-        elif combined["confidence"] == "MEDIUM":
-            risk_pct = 1.5
-        else:
-            risk_pct = 1.0
-
-        # مضاعف الهدف حسب السكور
-        if combined["score"] >= 75:
-            reward_mult = 2.5
-        elif combined["score"] >= 65:
-            reward_mult = 2.0
-        else:
-            reward_mult = 1.5
-
-        reward_pct = risk_pct * reward_mult
-
-        action = combined["action"]
-
-        if action == "BUY":
-            sl = round(price * (1 - risk_pct / 100), 4)
-            tp = round(price * (1 + reward_pct / 100), 4)
-        elif action == "SELL":
-            sl = round(price * (1 + risk_pct / 100), 4)
-            tp = round(price * (1 - reward_pct / 100), 4)
-
-        # حساب نسبة العائد للمخاطرة
-        if tp is not None and sl is not None and price != sl:
-            rr = round(abs((tp - price) / (price - sl)), 2)
+            # اختيار نسب المخاطرة/الربح الذكية
+            rr_profile = choose_risk_reward(combined, tf_results)
+            # النسب هنا ككسور (0.015 = 1.5%) فنحوّلها إلى %
+            risk_pct = rr_profile["risk_pct"] * 100.0
+            reward_pct = rr_profile["reward_pct"] * 100.0
+            if risk_pct:
+                rr = round(reward_pct / risk_pct, 2)
 
     # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
-    reason_lines.append(
-        "أقوى الفريمات: "
-        + ", ".join(
-            tf for tf, d in tf_results.items()
-            if d.get("trend_score", 50) >= combined["score"]
-        )
-    )
+
+    strong_tfs = [
+        tf for tf, d in tf_results.items()
+        if d.get("trend_score", 50) >= combined["score"]
+    ]
+    if strong_tfs:
+        reason_lines.append("أقوى الفريمات: " + ", ".join(strong_tfs))
+
     if combined["pump_dump_risk"] != "LOW":
         reason_lines.append(
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
@@ -560,16 +553,21 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     explanation = " | ".join(reason_lines)
 
+    # 5) نغني كائن القرار بالمستويات ونِسَب المخاطرة
+    decision = dict(combined)
+    decision.update(trade_levels)
+    if risk_pct is not None:
+        decision["risk_pct"] = risk_pct
+    if reward_pct is not None:
+        decision["reward_pct"] = reward_pct
+    if rr is not None:
+        decision["rr"] = rr
+
     return {
         "symbol": symbol_norm,
         "last_price": float(last_close) if last_close is not None else None,
         "timeframes": tf_results,
-        "decision": combined,
+        "decision": decision,
         "reason": explanation,
-        # خطة الصفقة
-        "tp": tp,
-        "sl": sl,
-        "rr": rr,
-        "risk_pct": risk_pct,
-        "reward_pct": reward_pct,
     }
+

@@ -50,21 +50,20 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"⏳ جارِ تحليل السوق لـ {symbol} عبر B7A Ultra Engine ...")
 
     try:
-        # 2) نولّد إشارة من المحرك الذكي (ما نرسل السعر هنا، الدالة هي اللي تجيب كل البيانات)
+        # 2) نولّد إشارة من المحرك الذكي
         signal_data = generate_signal(symbol)
     except Exception as e:
         await update.message.reply_text(
             "❌ صار خطأ أثناء توليد الإشارة، جرّب بعد شوي أو مع عملة ثانية."
         )
-        # optional: اطبع الخطأ في اللوجات
         print("Signal error:", e)
         return
 
     # 3) نفكك البيانات الراجعة من المحرك
-    decision = signal_data.get("decision", {})
-    tf_data  = signal_data.get("timeframes", {})
-    last_price = signal_data.get("last_price")
-    reason = signal_data.get("reason", "")
+    decision    = signal_data.get("decision", {})
+    tf_data     = signal_data.get("timeframes", {})
+    last_price  = signal_data.get("last_price")
+    reason      = signal_data.get("reason", "")
 
     action      = decision.get("action", "WAIT")
     score       = decision.get("score", 50)
@@ -72,18 +71,18 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     confidence  = decision.get("confidence", "LOW")
     pump_risk   = decision.get("pump_dump_risk", "LOW")
 
-    # 4) ملخص الفريمات
+    # 4) ملخص الفريمات (بتنسيق جميل)
     lines = []
     for tf_name in ["15m", "1h", "4h", "1d"]:
         tf = tf_data.get(tf_name)
         if not tf:
             continue
 
-        tf_trend = tf.get("trend", "UNKNOWN")
-        tf_score = tf.get("trend_score", 50)
-        tf_rsi   = tf.get("rsi")
-        tf_change_1 = tf.get("change_1")
-        tf_change_4 = tf.get("change_4")
+        tf_trend     = tf.get("trend", "UNKNOWN")
+        tf_score     = tf.get("trend_score", 50)
+        tf_rsi       = tf.get("rsi")
+        tf_change_1  = tf.get("change_1")
+        tf_change_4  = tf.get("change_4")
 
         line = f"• {tf_name}: {tf_trend} | Score: {tf_score:.0f}"
 
@@ -96,30 +95,44 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if tf_change_4 is not None:
             line += f" | 📊 تغيير آخر 4 شمعات: {tf_change_4:+.2f}%"
 
-
         lines.append(line)
 
     tf_summary = "\n".join(lines) if lines else "لا يوجد بيانات كافية لكل الفريمات."
 
-    # 5) نبني الرسالة النهائية
-    msg = f"📊 إشارة B7A Ultra لـ {signal_data.get('symbol', symbol)}\n\n"
+    # 5) نبني الرسالة النهائية بشكل فخم
+    msg_lines = []
 
+    # رأس الرسالة
+    msg_lines.append("📊 B7A Ultra Signal")
+    msg_lines.append(f"🔹 العملة: {signal_data.get('symbol', symbol)}")
     if last_price is not None:
-        msg += f"السعر الحالي: {last_price:.4f} USDT\n\n"
+        msg_lines.append(f"💰 السعر الحالي: {last_price:.4f} USDT")
+    msg_lines.append("────────────────────")
 
-    msg += (
-        f"قرار النظام: {action}\n"
-        f"الإتجاه العام: {trend}\n"
-        f"قوة الإشارة (Score): {score}/100\n"
-        f"درجة الثقة: {confidence}\n"
-        f"مخاطرة Pump/Dump: {pump_risk}\n\n"
-    )
+    # قسم القرار
+    msg_lines.append("📈 قرار النظام:")
+    msg_lines.append(f"• الإجراء: {action}")
+    msg_lines.append(f"• الإتجاه العام: {trend}")
+    msg_lines.append(f"• قوة الإشارة (Score): {score}/100")
+    msg_lines.append(f"• درجة الثقة: {confidence}")
+    msg_lines.append(f"• مخاطر Pump/Dump: {pump_risk}")
+    msg_lines.append("────────────────────")
 
-    msg += "🧠 ملخص الفريمات:\n" + tf_summary
+    # قسم الفريمات
+    msg_lines.append("🧠 ملخص الفريمات:")
+    msg_lines.append(tf_summary)
 
+    # قسم السبب
     if reason:
-        msg += "\n\n📌 سبب الإشارة (ملخص ذكي):\n" + reason
+        msg_lines.append("────────────────────")
+        msg_lines.append("📌 ملخص ذكي لسبب الإشارة:")
+        msg_lines.append(reason)
 
-    msg += "\n\n⚠️ هذه ليست نصيحة استثمارية، استخدم إدارة مخاطر دائماً."
+    # ديسكليمر
+    msg_lines.append("────────────────────")
+    msg_lines.append("⚠️ هذه ليست نصيحة استثمارية، استخدم دائماً إدارة مخاطر.")
 
-    await update.message.reply_text(msg)
+    final_msg = "\n".join(msg_lines)
+
+    await update.message.reply_text(final_msg)
+

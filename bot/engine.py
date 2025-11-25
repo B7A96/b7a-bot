@@ -436,6 +436,40 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
         "reward_pct": float(reward_pct),
     }
 
+def build_trade_levels(last_close: float,
+                       ohlcv: Dict[str, np.ndarray],
+                       action: str) -> Dict[str, float]:
+    """
+    يحسب مستويات SL / TP1 / TP2 بناءً على ATR من فريم أساسي (مثلاً 1h).
+    """
+    high = ohlcv["high"]
+    low = ohlcv["low"]
+    close = ohlcv["close"]
+
+    try:
+        atr_vals = atr(high, low, close, period=14)
+        atr_last = float(atr_vals[-1])
+    except ValueError:
+        # لو ما كفيت البيانات نرجّع بدون مستويات
+        return {}
+
+    levels: Dict[str, float] = {}
+
+    if action == "BUY":
+        sl = last_close - 1.5 * atr_last
+        tp1 = last_close + 2.0 * atr_last
+        tp2 = last_close + 3.0 * atr_last
+    elif action == "SELL":
+        sl = last_close + 1.5 * atr_last
+        tp1 = last_close - 2.0 * atr_last
+        tp2 = last_close - 3.0 * atr_last
+    else:
+        return {}
+
+    levels["sl"] = sl
+    levels["tp1"] = tp1
+    levels["tp2"] = tp2
+    return levels
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """

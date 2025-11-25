@@ -10,13 +10,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🤖 قائمة الأوامر:\n\n"
-        "/start – تشغيل البوت\n"
-        "/help – عرض هذه القائمة\n"
-        "/price BTC – سعر العملة (سبوت)\n"
-        "/signal BTC – إشارة تحليل احترافية من Ultra Engine\n"
-    )
+    text = """
+🤖 قائمة الأوامر:
+
+/start – تشغيل البوت
+/help – عرض هذه القائمة
+/price BTC – سعر العملة
+/signal BTC – إشارة ذكية (تجريبية)
+"""
     await update.message.reply_text(text)
 
 
@@ -35,7 +36,6 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # مثال: /signal BTC
     if len(context.args) == 0:
         await update.message.reply_text(
             "🚨 استخدم الأمر بالشكل التالي:\n"
@@ -47,48 +47,42 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol = context.args[0].upper()
 
-    # رسالة مبدئية
-    await update.message.reply_text("⏳ جاري تحليل السوق باستخدام B7A Ultra Engine...")
-
     try:
-        data = generate_signal(symbol)   # ✅ الآن ياخذ رمز واحد فقط
-
-        decision = data["decision"]
-        price_value = data.get("last_price")
-        reason = data.get("reason", "")
-        tfs = data.get("timeframes", {})
-
-        # نحاول نبرز أهم الفريمات (1h و 4h مثلاً)
-        tf_summary_lines = []
-        for tf in ["15m", "1h", "4h", "1d"]:
-            d = tfs.get(tf)
-            if not d:
-                continue
-            tf_summary_lines.append(
-                f"• {tf}: ترند {d.get('trend', 'N/A')} | سكور {int(d.get('trend_score', 50))}"
-            )
-        tf_summary = "\n".join(tf_summary_lines) if tf_summary_lines else "ما توفرت بيانات كافية من Binance."
-
-        text = (
-            f"📊 *B7A Ultra Signal*\n"
-            f"العملة: *{symbol}*\n\n"
-        )
-
-        if price_value is not None:
-            text += f"السعر الحالي: `{price_value}` USDT\n\n"
-
-        text += (
-            f"الاتجاه العام: *{decision['trend']}*\n"
-            f"الإجراء المقترح: *{decision['action']}*\n"
-            f"درجة الثقة: *{decision['confidence']}*\n"
-            f"مخاطر Pump/Dump: *{decision['pump_dump_risk']}*\n\n"
-            f"🕒 ملخص الفريمات:\n{tf_summary}\n\n"
-        )
-
-        if reason:
-            text += f"📌 سبب الإشارة:\n{reason}"
-
-        await update.message.reply_text(text, parse_mode="Markdown")
-
+        signal_data = generate_signal(symbol)
     except Exception as e:
-        await update.message.reply_text(f"❌ فشل أثناء التحليل: {str(e)}")
+        await update.message.reply_text(
+            f"⚠️ صار خطأ أثناء توليد الإشارة:\n{e}"
+        )
+        return
+
+    side = signal_data.get("side", "WAIT")
+    last_price = signal_data.get("last_price")
+    tp = signal_data.get("tp")
+    sl = signal_data.get("sl")
+    trend = signal_data.get("trend", "UNKNOWN")
+    confidence = signal_data.get("confidence", "LOW")
+    pump_risk = signal_data.get("pump_dump_risk", "LOW")
+    reason = signal_data.get("reason", "")
+
+    msg = f"📊 إشارة {symbol} من B7A Ultra Bot\n\n"
+
+    if last_price is not None:
+        msg += f"السعر الحالي التقريبي: {last_price:.4f} USDT\n"
+
+    msg += f"الاتجاه العام: {trend}\n"
+    msg += f"قرار البوت: {side} (ثقة: {confidence})\n"
+
+    if tp is not None:
+        msg += f"🎯 هدف الربح (TP): {tp:.4f} USDT\n"
+    if sl is not None:
+        msg += f"🛡 وقف الخسارة (SL): {sl:.4f} USDT\n"
+
+    if pump_risk and pump_risk != "LOW":
+        msg += f"\n⚠️ تحذير: احتمال Pump/Dump = {pump_risk}\n"
+
+    msg += "\n📌 ملاحظة مهمة: الإشارة تجريبية للاختبار فقط، وليست نصيحة استثمارية.\n"
+
+    if reason:
+        msg += "\nسبب الإشارة:\n" + reason
+
+    await update.message.reply_text(msg)

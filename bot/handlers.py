@@ -91,10 +91,11 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             line += f" | RSI: {tf_rsi:.1f}"
 
         if tf_change_1 is not None:
-            line += f" | Δ1c: {tf_change_1:+.2f}%"
+            line += f" | 📉 تغيير آخر شمعة: {tf_change_1:+.2f}%"
 
         if tf_change_4 is not None:
-            line += f" | Δ4c: {tf_change_4:+.2f}%"
+            line += f" | 📊 تغيير آخر 4 شمعات: {tf_change_4:+.2f}%"
+
 
         lines.append(line)
 

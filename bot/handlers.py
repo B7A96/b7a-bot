@@ -1,6 +1,8 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from .engine import generate_signal
+
 from bot.market import get_price
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

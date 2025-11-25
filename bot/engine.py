@@ -348,14 +348,81 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 # نقطة الدخول الرئيسية
 # =========================
 
+def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
+    """
+    يحدد نسب المخاطرة والربح تلقائياً حسب:
+    - قوة الاتجاه (score + trend)
+    - درجة الثقة
+    - التقلب (من تغيّر السعر في 15m و 1h)
+    - مخاطر Pump/Dump
+    """
+    score = decision.get("score", 50)
+    confidence = decision.get("confidence", "LOW")
+    pump_risk = decision.get("pump_dump_risk", "LOW")
+    trend = decision.get("trend", "RANGING")
+
+    # نستخدم تغير السعر في آخر شمعة من 15m و 1h لتقدير التقلب
+    change_15 = abs(tf_results.get("15m", {}).get("change_1", 0.0) or 0.0)
+    change_1h = abs(tf_results.get("1h", {}).get("change_1", 0.0) or 0.0)
+    volatility = max(change_15, change_1h)
+
+    # نحدد درجة التقلب
+    if volatility < 0.5:
+        vol_level = "LOW"
+    elif volatility < 1.5:
+        vol_level = "MEDIUM"
+    else:
+        vol_level = "HIGH"
+
+    # قيم افتراضية
+    risk_pct = 0.015   # 1.5%
+    reward_pct = 0.03  # 3.0%
+
+    # قوّة الاتجاه
+    strong_trend = (score >= 75 and confidence == "HIGH" and trend in ("BULLISH", "BEARISH"))
+    medium_trend = (60 <= score < 75)
+
+    if strong_trend and pump_risk == "LOW":
+        # سوق قوي، اتجاه واضح → نعطي مساحة ربح أكبر
+        risk_pct = 0.02    # 2%
+        reward_pct = 0.06  # 6%
+    elif medium_trend and pump_risk != "HIGH":
+        risk_pct = 0.018   # 1.8%
+        reward_pct = 0.04  # 4%
+    else:
+        # اتجاه ضعيف / متذبذب
+        risk_pct = 0.015
+        reward_pct = 0.025
+
+    # تعديل حسب التقلب
+    if vol_level == "HIGH":
+        # لو السوق متوحش → نوسع SL و TP شوي
+        risk_pct *= 1.3
+        reward_pct *= 1.3
+    elif vol_level == "LOW":
+        # سوق هادي → نسب أصغر
+        risk_pct *= 0.8
+        reward_pct *= 0.8
+
+    # لو مخاطر Pump متوسطة نقلل الربح شوي
+    if pump_risk == "MEDIUM":
+        reward_pct *= 0.8
+
+    return {
+        "risk_pct": float(risk_pct),
+        "reward_pct": float(reward_pct),
+    }
+
+
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
     Ultra Engine:
-    يرجع قرار BUY / SELL / WAIT + تفاصيل للتحليل.
+    يرجع قرار BUY / SELL / WAIT + تفاصيل التحليل + TP/SL بنمط Auto Mode.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
+    # نجمع بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
@@ -371,26 +438,34 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
+    # نجمع الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
     last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
 
-    # حساب TP / SL بسيط كنسبة من السعر
+    action = combined.get("action", "WAIT")
     tp = None
     sl = None
-    if last_close is not None:
-        price = float(last_close)
-        # نسبة مخاطرة/ربح تقريبية (تقدر نعدلها لاحقاً)
-        risk_pct = 0.02   # 2%
-        reward_pct = 0.04 # 4%
+    profile = "NO_TRADE"
 
-        if combined["action"] == "BUY":
+    if last_close is not None and action in ("BUY", "SELL"):
+        price = float(last_close)
+
+        # نختار نسب المخاطرة والربح حسب Auto Mode
+        risk_info = choose_risk_reward(combined, tf_results)
+        risk_pct = risk_info["risk_pct"]
+        reward_pct = risk_info["reward_pct"]
+
+        profile = "AUTO_STRONG" if combined.get("confidence") == "HIGH" else "AUTO_NORMAL"
+
+        if action == "BUY":
             sl = price * (1 - risk_pct)
             tp = price * (1 + reward_pct)
-        elif combined["action"] == "SELL":
+        elif action == "SELL":
             sl = price * (1 + risk_pct)
             tp = price * (1 - reward_pct)
 
+    # نص السبب/الشرح
     reason_lines: List[str] = []
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
     strong_tfs = [
@@ -403,6 +478,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         reason_lines.append(
             f"تنبيه: احتمالية Pump/Dump = {combined['pump_dump_risk']} (حذر مع الدخول)."
         )
+    if action == "WAIT":
+        reason_lines.append("النظام يرى أن الفرصة حالياً غير مثالية للدخول (وضع انتظار).")
 
     explanation = " | ".join(reason_lines)
 
@@ -411,9 +488,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "last_price": float(last_close) if last_close is not None else None,
         "timeframes": tf_results,
         "decision": combined,
-        "side": combined["action"],
+        "side": action,
         "tp": tp,
         "sl": sl,
+        "risk_profile": profile,
         "confidence": combined["confidence"],
         "trend": combined["trend"],
         "pump_dump_risk": combined["pump_dump_risk"],

@@ -122,11 +122,17 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lines.append("🧠 ملخص الفريمات:")
     msg_lines.append(tf_summary)
 
+
     # قسم السبب
     if reason:
         msg_lines.append("────────────────────")
         msg_lines.append("📌 ملخص ذكي لسبب الإشارة:")
         msg_lines.append(reason)
+
+    profile = signal_data.get("risk_profile", "AUTO")
+
+msg += f"نمط إدارة الصفقة: {profile}\n"
+
 
     # ديسكليمر
     msg_lines.append("────────────────────")

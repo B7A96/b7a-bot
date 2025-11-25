@@ -28,7 +28,7 @@ def _normalize_symbol(symbol: str) -> str:
 
 def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.ndarray]:
     """
-    Fetch OHLCV candles from Binance and return numpy arrays.
+    يجلب بيانات OHLCV من Binance ويحولها إلى numpy arrays.
     """
     symbol = _normalize_symbol(symbol)
     url = f"{BINANCE_BASE_URL}/api/v3/klines"
@@ -146,6 +146,7 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
         return 0.0
     return (series[-1] - series[-period - 1]) / series[-period - 1] * 100.0
 
+
 def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
     """
     Average True Range لقياس تذبذب السعر.
@@ -169,6 +170,165 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) 
         atr_values[i] = (atr_values[i - 1] * (period - 1) + tr[i]) / period
 
     return atr_values
+
+
+# =========================
+# Liquidity Map Engine
+# =========================
+
+def _detect_swings(high: np.ndarray, low: np.ndarray, left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
+    """
+    يحدد swing highs و swing lows بسيطة (قمة أعلى من الجيران / قاع أقل من الجيران).
+    """
+    n = len(high)
+    swing_highs: List[int] = []
+    swing_lows: List[int] = []
+    for i in range(left, n - right):
+        window_high = high[i - left: i + right + 1]
+        if high[i] >= window_high.max():
+            swing_highs.append(i)
+        window_low = low[i - left: i + right + 1]
+        if low[i] <= window_low.min():
+            swing_lows.append(i)
+    return swing_highs, swing_lows
+
+
+def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[str, Any]]:
+    """
+    يجمع القمم / القيعان المتقاربة في مستوى واحد (zone).
+    tolerance = 0.001 يعني تقريباً 0.1% فرق.
+    """
+    if not prices:
+        return []
+    prices_sorted = sorted(prices)
+    levels: List[Dict[str, Any]] = []
+    for p in prices_sorted:
+        if not levels:
+            levels.append({"price": float(p), "count": 1})
+            continue
+        last = levels[-1]
+        if abs(p - last["price"]) / max(last["price"], 1e-9) <= tolerance:
+            # ندمج في نفس المستوى
+            new_count = last["count"] + 1
+            last["price"] = (last["price"] * last["count"] + p) / new_count
+            last["count"] = new_count
+        else:
+            levels.append({"price": float(p), "count": 1})
+    return levels
+
+
+def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
+    """
+    يبني خريطة سيولة بسيطة:
+    - يبحث عن swing highs / lows
+    - يكوّن مستويات سيولة فوق السعر (Buy-side liquidity) وتحت السعر (Sell-side liquidity)
+    - يحسب قوة كل منطقة + انحياز السيولة (أعلى / أسفل)
+    """
+    high = ohlcv["high"]
+    low = ohlcv["low"]
+    close = ohlcv["close"]
+
+    last_close = float(close[-1])
+
+    swing_highs, swing_lows = _detect_swings(high, low, left=2, right=2)
+
+    high_prices = [high[i] for i in swing_highs]
+    low_prices = [low[i] for i in swing_lows]
+
+    # نكوّن مستويات من القمم والقيعان
+    high_levels = _cluster_levels(high_prices, tolerance=0.0015)
+    low_levels = _cluster_levels(low_prices, tolerance=0.0015)
+
+    zones: List[Dict[str, Any]] = []
+
+    above_strength = 0.0
+    below_strength = 0.0
+
+    # مستويات فوق السعر (Buy-side liquidity)
+    for lvl in high_levels:
+        price = float(lvl["price"])
+        count = int(lvl["count"])
+        distance_pct = (price - last_close) / last_close * 100.0
+        if distance_pct <= 0:
+            # مستوى أصبح تحت السعر الحالي -> سيولة قديمة
+            continue
+        # كل ما كان أقرب للسعر وكل ما تكرر أكثر، تزيد قوة السيولة
+        base = min(count * 8.0, 40.0)
+        if distance_pct < 1:
+            dist_score = 40.0
+        elif distance_pct < 3:
+            dist_score = 30.0
+        elif distance_pct < 5:
+            dist_score = 20.0
+        else:
+            dist_score = 10.0
+        strength = max(5.0, min(base + dist_score, 100.0))
+        above_strength += strength
+        zones.append(
+            {
+                "price": price,
+                "side": "BUY",  # سيولة فوق السعر، عادة يجذب السعر لفوق
+                "count": count,
+                "distance_pct": distance_pct,
+                "strength": strength,
+            }
+        )
+
+    # مستويات تحت السعر (Sell-side liquidity)
+    for lvl in low_levels:
+        price = float(lvl["price"])
+        count = int(lvl["count"])
+        distance_pct = (last_close - price) / last_close * 100.0
+        if distance_pct <= 0:
+            # مستوى أصبح فوق السعر -> سيولة قديمة
+            continue
+        base = min(count * 8.0, 40.0)
+        if distance_pct < 1:
+            dist_score = 40.0
+        elif distance_pct < 3:
+            dist_score = 30.0
+        elif distance_pct < 5:
+            dist_score = 20.0
+        else:
+            dist_score = 10.0
+        strength = max(5.0, min(base + dist_score, 100.0))
+        below_strength += strength
+        zones.append(
+            {
+                "price": price,
+                "side": "SELL",  # سيولة تحت السعر، يجذب السعر لتحت
+                "count": count,
+                "distance_pct": distance_pct,
+                "strength": strength,
+            }
+        )
+
+    total_strength = above_strength + below_strength
+    if total_strength <= 0:
+        imbalance = 0.0
+        bias = "FLAT"
+        liq_score = 0.0
+    else:
+        imbalance = (above_strength - below_strength) / total_strength  # من -1 إلى +1
+        if imbalance > 0.2:
+            bias = "UP"   # سيولة أقوى فوق السعر -> السوق يميل يجمع سيولة لفوق
+        elif imbalance < -0.2:
+            bias = "DOWN"  # سيولة أقوى تحت السعر -> يميل يجمع سيولة لتحت
+        else:
+            bias = "FLAT"
+        liq_score = abs(imbalance) * 100.0
+
+    return {
+        "timeframe": name,
+        "zones": zones,
+        "above_strength": float(above_strength),
+        "below_strength": float(below_strength),
+        "imbalance": float(imbalance),
+        "bias": bias,
+        "score": float(liq_score),
+        "last_price": last_close,
+    }
+
 
 # =========================
 # تحليل كل فريم
@@ -256,6 +416,13 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if abs(change_1) > 6 and vol_surge:
         pump_dump_risk = "HIGH"
 
+    # 🔥 خريطة السيولة لهذا الفريم
+    liq_map = build_liquidity_map(ohlcv, name)
+    liq_bias = liq_map.get("bias", "FLAT")
+    liq_score = liq_map.get("score", 0.0)
+    liq_above = liq_map.get("above_strength", 0.0)
+    liq_below = liq_map.get("below_strength", 0.0)
+
     info.update(
         {
             "close": last_close,
@@ -271,6 +438,12 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "change_4": change_4,
             "trend_score": trend_score,
             "pump_dump_risk": pump_dump_risk,
+            # Liquidity info
+            "liquidity": liq_map,
+            "liq_bias": liq_bias,
+            "liq_score": liq_score,
+            "liq_above": liq_above,
+            "liq_below": liq_below,
         }
     )
 
@@ -303,9 +476,13 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     max_pump_risk = "LOW"
 
+    liq_above_total = 0.0
+    liq_below_total = 0.0
+
     for tf, data in tf_data.items():
         w = weights.get(tf, 0.0)
-        score += data.get("trend_score", 50) * w
+        tf_score = data.get("trend_score", 50)
+        score += tf_score * w
         total_weight += w
 
         if data.get("trend") == "BULLISH":
@@ -319,6 +496,9 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         elif risk == "MEDIUM" and max_pump_risk != "HIGH":
             max_pump_risk = "MEDIUM"
 
+        liq_above_total += data.get("liq_above", 0.0) * w
+        liq_below_total += data.get("liq_below", 0.0) * w
+
     if total_weight > 0:
         score /= total_weight
 
@@ -328,6 +508,21 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         global_trend = "BEARISH"
     else:
         global_trend = "RANGING"
+
+    # 🔥 تجميع انحياز السيولة الكلي
+    if liq_above_total + liq_below_total > 0:
+        liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
+        if liq_imbalance > 0.2:
+            liquidity_bias = "UP"
+        elif liq_imbalance < -0.2:
+            liquidity_bias = "DOWN"
+        else:
+            liquidity_bias = "FLAT"
+        liquidity_score = abs(liq_imbalance) * 100.0
+    else:
+        liq_imbalance = 0.0
+        liquidity_bias = "FLAT"
+        liquidity_score = 0.0
 
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
@@ -347,6 +542,13 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     elif score <= 30 and bearish_votes > bullish_votes and not oversold:
         action = "SELL"
 
+    # لو الإشارة عندنا مترددة (بين 60 و 70) نستخدم انحياز السيولة لدفع القرار
+    if action == "WAIT" and 60 <= score < 70 and max_pump_risk != "HIGH":
+        if liquidity_bias == "UP" and bullish_votes >= bearish_votes:
+            action = "BUY"
+        elif liquidity_bias == "DOWN" and bearish_votes >= bullish_votes:
+            action = "SELL"
+
     distance = abs(score - 50)
     if distance > 25:
         confidence = "HIGH"
@@ -364,11 +566,13 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "action": action,
         "confidence": confidence,
         "pump_dump_risk": max_pump_risk,
+        "liquidity_bias": liquidity_bias,
+        "liquidity_score": round(float(liquidity_score), 2),
     }
 
 
 # =========================
-# نقطة الدخول الرئيسية
+# اختيار نسب المخاطرة / الربح (احتياطي لو حبّينا نستخدمه لاحقاً)
 # =========================
 
 def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
@@ -384,12 +588,10 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
     pump_risk = decision.get("pump_dump_risk", "LOW")
     trend = decision.get("trend", "RANGING")
 
-    # نستخدم تغير السعر في آخر شمعة من 15m و 1h لتقدير التقلب
     change_15 = abs(tf_results.get("15m", {}).get("change_1", 0.0) or 0.0)
     change_1h = abs(tf_results.get("1h", {}).get("change_1", 0.0) or 0.0)
     volatility = max(change_15, change_1h)
 
-    # نحدد درجة التقلب
     if volatility < 0.5:
         vol_level = "LOW"
     elif volatility < 1.5:
@@ -397,37 +599,29 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
     else:
         vol_level = "HIGH"
 
-    # قيم افتراضية
     risk_pct = 0.015   # 1.5%
     reward_pct = 0.03  # 3.0%
 
-    # قوّة الاتجاه
     strong_trend = (score >= 75 and confidence == "HIGH" and trend in ("BULLISH", "BEARISH"))
     medium_trend = (60 <= score < 75)
 
     if strong_trend and pump_risk == "LOW":
-        # سوق قوي، اتجاه واضح → نعطي مساحة ربح أكبر
-        risk_pct = 0.02    # 2%
-        reward_pct = 0.06  # 6%
+        risk_pct = 0.02
+        reward_pct = 0.06
     elif medium_trend and pump_risk != "HIGH":
-        risk_pct = 0.018   # 1.8%
-        reward_pct = 0.04  # 4%
+        risk_pct = 0.018
+        reward_pct = 0.04
     else:
-        # اتجاه ضعيف / متذبذب
         risk_pct = 0.015
         reward_pct = 0.025
 
-    # تعديل حسب التقلب
     if vol_level == "HIGH":
-        # لو السوق متوحش → نوسع SL و TP شوي
         risk_pct *= 1.3
         reward_pct *= 1.3
     elif vol_level == "LOW":
-        # سوق هادي → نسب أصغر
         risk_pct *= 0.8
         reward_pct *= 0.8
 
-    # لو مخاطر Pump متوسطة نقلل الربح شوي
     if pump_risk == "MEDIUM":
         reward_pct *= 0.8
 
@@ -435,6 +629,7 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
         "risk_pct": float(risk_pct),
         "reward_pct": float(reward_pct),
     }
+
 
 def build_trade_levels(last_close: float,
                        ohlcv: Dict[str, np.ndarray],
@@ -450,7 +645,6 @@ def build_trade_levels(last_close: float,
         atr_vals = atr(high, low, close, period=14)
         atr_last = float(atr_vals[-1])
     except ValueError:
-        # لو ما كفيت البيانات نرجّع بدون مستويات
         return {}
 
     levels: Dict[str, float] = {}
@@ -471,22 +665,27 @@ def build_trade_levels(last_close: float,
     levels["tp2"] = tp2
     return levels
 
+
+# =========================
+# نقطة الدخول الرئيسية
+# =========================
+
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
-    نقطة الدخول الرئيسية لـ B7A Ultra Engine.
-    ترجع ديكشنري جاهز للعرض في تيليجرام.
+    Main Ultra Engine entrypoint.
+
+    Returns a dict ready to be formatted by the Telegram layer.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
-    # 1) جلب بيانات الفريمات + التحليل
+    # 1) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
-            tf_info["ohlcv"] = ohlcv  # نحتفظ بالشموع لاستخدام ATR لاحقاً
             tf_results[name] = tf_info
-            time.sleep(0.1)
+            time.sleep(0.1)  # نرفق شوي على Binance
         except Exception as e:
             tf_results[name] = {
                 "timeframe": name,
@@ -496,55 +695,72 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 2) قرار عام من دمج الفريمات
+    # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
-    # نختار فريم أساس نشتغل عليه في حساب الـ ATR (الأولوية 1h ثم 4h ثم 15m)
-    base_tf_name = None
-    if "1h" in tf_results:
-        base_tf_name = "1h"
-    elif "4h" in tf_results:
-        base_tf_name = "4h"
-    elif "15m" in tf_results:
-        base_tf_name = "15m"
+    # نحاول نستخدم إغلاق فريم 1h كسعر مرجعي، وإذا مو موجود نرجع لفريم 15m
+    last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
 
-    last_close = None
-    if base_tf_name:
-        last_close = tf_results[base_tf_name].get("close")
-    else:
-        # احتياط لو ما توفر أي فريم (المفروض نادراً يصير)
-        last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
-
-    # 3) حساب مستويات الصفقة ATR-Based + نسبة المخاطرة/الربح
-    trade_levels: Dict[str, float] = {}
+    # 3) توليد TP / SL بناءً على السعر والسكور والثقة
+    tp = None
+    sl = None
+    rr = None  # Risk/Reward
     risk_pct = None
     reward_pct = None
-    rr = None  # Risk/Reward ratio
 
-    if last_close is not None and combined["action"] in ("BUY", "SELL") and base_tf_name:
-        ohlcv_base = tf_results[base_tf_name].get("ohlcv")
-        if ohlcv_base:
-            # SL / TP1 / TP2 من ATR
-            trade_levels = build_trade_levels(float(last_close), ohlcv_base, combined["action"])
+    if last_close is not None:
+        price = float(last_close)
 
-            # اختيار نسب المخاطرة/الربح الذكية
-            rr_profile = choose_risk_reward(combined, tf_results)
-            # النسب هنا ككسور (0.015 = 1.5%) فنحوّلها إلى %
-            risk_pct = rr_profile["risk_pct"] * 100.0
-            reward_pct = rr_profile["reward_pct"] * 100.0
-            if risk_pct:
-                rr = round(reward_pct / risk_pct, 2)
+        if combined["confidence"] == "HIGH":
+            risk_pct = 2.0
+        elif combined["confidence"] == "MEDIUM":
+            risk_pct = 1.5
+        else:
+            risk_pct = 1.0
+
+        if combined["score"] >= 75:
+            reward_mult = 2.5
+        elif combined["score"] >= 65:
+            reward_mult = 2.0
+        else:
+            reward_mult = 1.5
+
+        reward_pct = risk_pct * reward_mult
+
+        action = combined["action"]
+
+        if action == "BUY":
+            sl = round(price * (1 - risk_pct / 100), 4)
+            tp = round(price * (1 + reward_pct / 100), 4)
+        elif action == "SELL":
+            sl = round(price * (1 + risk_pct / 100), 4)
+            tp = round(price * (1 - reward_pct / 100), 4)
+
+        if tp is not None and sl is not None and price != sl:
+            rr = round(abs((tp - price) / (price - sl)), 2)
 
     # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
+    reason_lines.append(
+        "أقوى الفريمات: "
+        + ", ".join(
+            tf for tf, d in tf_results.items()
+            if d.get("trend_score", 50) >= combined["score"]
+        )
+    )
 
-    strong_tfs = [
-        tf for tf, d in tf_results.items()
-        if d.get("trend_score", 50) >= combined["score"]
-    ]
-    if strong_tfs:
-        reason_lines.append("أقوى الفريمات: " + ", ".join(strong_tfs))
+    # انحياز السيولة الكلي
+    liq_bias = combined.get("liquidity_bias")
+    liq_score = combined.get("liquidity_score", 0.0)
+    if liq_bias == "UP":
+        reason_lines.append(
+            f"السيولة المتراكمة أقوى أعلى السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من فوق."
+        )
+    elif liq_bias == "DOWN":
+        reason_lines.append(
+            f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
+        )
 
     if combined["pump_dump_risk"] != "LOW":
         reason_lines.append(
@@ -553,21 +769,16 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     explanation = " | ".join(reason_lines)
 
-    # 5) نغني كائن القرار بالمستويات ونِسَب المخاطرة
-    decision = dict(combined)
-    decision.update(trade_levels)
-    if risk_pct is not None:
-        decision["risk_pct"] = risk_pct
-    if reward_pct is not None:
-        decision["reward_pct"] = reward_pct
-    if rr is not None:
-        decision["rr"] = rr
-
     return {
         "symbol": symbol_norm,
         "last_price": float(last_close) if last_close is not None else None,
         "timeframes": tf_results,
-        "decision": decision,
+        "decision": combined,
         "reason": explanation,
+        # خطة الصفقة
+        "tp": tp,
+        "sl": sl,
+        "rr": rr,
+        "risk_pct": risk_pct,
+        "reward_pct": reward_pct,
     }
-

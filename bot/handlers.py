@@ -2,11 +2,51 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from .engine import generate_signal
-from bot.market import get_price  # مثل ما هو
-
-# ... start / help / price نفس ما عندك ...
+from bot.market import get_price  # أو من .market حسب ما تستخدم في المشروع
 
 
+# =========================
+# /start
+# =========================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 B7A Trading Bot is LIVE! 🔥")
+
+
+# =========================
+# /help
+# =========================
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = """
+🤖 قائمة الأوامر:
+
+/start – تشغيل البوت
+/help – عرض هذه القائمة
+/price BTC – سعر العملة (مثال: /price sol)
+/signal BTC – إشارة تحليل احترافية (مثال: /signal eth)
+"""
+    await update.message.reply_text(text)
+
+
+# =========================
+# /price
+# =========================
+async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("استخدم: /price BTC أو /price sol")
+        return
+
+    symbol = context.args[0].upper()
+    value = get_price(symbol)
+
+    if value:
+        await update.message.reply_text(f"💵 سعر {symbol}: {value} USDT")
+    else:
+        await update.message.reply_text("صار خطأ غير متوقع أثناء جلب السعر 😢")
+
+
+# =========================
+# /signal  (Ultra Engine)
+# =========================
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1) العملة
     if len(context.args) == 0:
@@ -50,7 +90,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     risk_pct   = signal_data.get("risk_pct")
     reward_pct = signal_data.get("reward_pct")
 
-    # 3) ملخص الفريمات (مثل ما هو عندك تقريباً)
+    # 3) ملخص الفريمات
     lines = []
     for tf_name in ["15m", "1h", "4h", "1d"]:
         tf = tf_data.get(tf_name)

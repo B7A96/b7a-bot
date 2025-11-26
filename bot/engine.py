@@ -1,5 +1,5 @@
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 import requests
@@ -534,9 +534,10 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     if score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
         action = "BUY"
-    elif score <= 30 and bearish_votes > bullish_votes and not oversold:
+    elif score <= 30 and bearish_votes > bearish_votes and not oversold:
         action = "SELL"
 
+    # في المنطقة الرمادية نستخدم انحياز السيولة
     if action == "WAIT" and 60 <= score < 70 and max_pump_risk != "HIGH":
         if liquidity_bias == "UP" and bullish_votes >= bearish_votes:
             action = "BUY"
@@ -566,11 +567,15 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # =========================
-# اختيار نسب المخاطرة / الربح (احتياطي)
+# اختيار نسب المخاطرة / الربح (اختياري)
 # =========================
 
 def choose_risk_reward(decision: Dict[str, Any],
                        tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
+    """
+    يحدد نسب المخاطرة والربح تلقائياً (غير مستخدمة حالياً في generate_signal
+    لكن نقدر نستفيد منها لاحقاً).
+    """
     score = decision.get("score", 50)
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk", "LOW")
@@ -619,39 +624,62 @@ def choose_risk_reward(decision: Dict[str, Any],
     }
 
 
-def build_trade_levels(last_close: float,
-                       ohlcv: Dict[str, np.ndarray],
-                       action: str) -> Dict[str, float]:
-    """
-    يحسب مستويات SL / TP1 / TP2 بناءً على ATR من فريم أساسي (مثلاً 1h).
-    """
-    high = ohlcv["high"]
-    low = ohlcv["low"]
-    close = ohlcv["close"]
+# =========================
+# حساب TP/SL + R:R باستخدام ATR + Fallback
+# =========================
 
-    try:
-        atr_vals = atr(high, low, close, period=14)
-        atr_last = float(atr_vals[-1])
-    except ValueError:
-        return {}
+def compute_trade_levels(
+    symbol_norm: str,
+    price: float,
+    action: str,
+    risk_pct: float,
+    reward_pct: float,
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    يحسب SL و TP و R:R باستخدام:
+    - ATR من فريم 1h، ولو ما يكفي → نجرب 15m
+    - لو ATR ما اشتغل نهائياً → نرجع لطريقة النِسَب المئوية فقط
+    """
+    # 1) نحاول نجيب ATR من 1h ثم من 15m
+    atr_value: Optional[float] = None
+    for tf_key in ["1h", "15m"]:
+        interval = TIMEFRAMES.get(tf_key)
+        if not interval:
+            continue
 
-    levels: Dict[str, float] = {}
+        try:
+            ohlcv = fetch_klines(symbol_norm, interval, limit=200)
+            atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
+            atr_value = float(atr_vals[-1])
+            break
+        except Exception:
+            continue
+
+    # 2) نحول النِسَب إلى مسافات سعرية
+    sl_dist_pct = price * (risk_pct / 100.0)
+    tp_dist_pct = price * (reward_pct / 100.0)
+
+    if atr_value is not None:
+        # نستخدم الأكبر بين ATR والنسبة المئوية
+        sl_dist = max(sl_dist_pct, 1.2 * atr_value)
+        tp_dist = max(tp_dist_pct, 1.5 * atr_value)
+    else:
+        # Fallback: ما عندنا ATR → نشتغل بالـ % فقط
+        sl_dist = sl_dist_pct
+        tp_dist = tp_dist_pct
+
+    if sl_dist <= 0 or tp_dist <= 0 or action not in ("BUY", "SELL"):
+        return None, None, None
 
     if action == "BUY":
-        sl = last_close - 1.5 * atr_last
-        tp1 = last_close + 2.0 * atr_last
-        tp2 = last_close + 3.0 * atr_last
-    elif action == "SELL":
-        sl = last_close + 1.5 * atr_last
-        tp1 = last_close - 2.0 * atr_last
-        tp2 = last_close - 3.0 * atr_last
-    else:
-        return {}
+        sl = round(price - sl_dist, 4)
+        tp = round(price + tp_dist, 4)
+    else:  # SELL
+        sl = round(price + sl_dist, 4)
+        tp = round(price - tp_dist, 4)
 
-    levels["sl"] = sl
-    levels["tp1"] = tp1
-    levels["tp2"] = tp2
-    return levels
+    rr = round(tp_dist / sl_dist, 2) if sl_dist > 0 else None
+    return sl, tp, rr
 
 
 # =========================
@@ -687,19 +715,20 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 3) نحدد السعر المرجعي (آخر إغلاق من 1h أو 15m)
     last_close_arr = tf_results.get("1h", tf_results.get("15m", {})).get("close")
     if isinstance(last_close_arr, np.ndarray) and last_close_arr.size > 0:
-        last_close = float(last_close_arr[-1])
+        last_close: Optional[float] = float(last_close_arr[-1])
     else:
         last_close = None
 
-    tp = None
-    sl = None
-    rr = None
-    risk_pct = None
-    reward_pct = None
+    tp: Optional[float] = None
+    sl: Optional[float] = None
+    rr: Optional[float] = None
+    risk_pct: Optional[float] = None
+    reward_pct: Optional[float] = None
 
     if last_close is not None:
         price = last_close
 
+        # نسب المخاطرة حسب الثقة
         if combined["confidence"] == "HIGH":
             risk_pct = 2.0
         elif combined["confidence"] == "MEDIUM":
@@ -707,6 +736,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
+        # مضاعف هدف الربح حسب السكور
         if combined["score"] >= 75:
             reward_mult = 2.5
         elif combined["score"] >= 65:
@@ -717,15 +747,14 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         reward_pct = risk_pct * reward_mult
         action = combined["action"]
 
-        if action == "BUY":
-            sl = round(price * (1 - risk_pct / 100), 4)
-            tp = round(price * (1 + reward_pct / 100), 4)
-        elif action == "SELL":
-            sl = round(price * (1 + risk_pct / 100), 4)
-            tp = round(price * (1 - reward_pct / 100), 4)
-
-        if tp is not None and sl is not None and price != sl:
-            rr = round(abs((tp - price) / (price - sl)), 2)
+        if action in ("BUY", "SELL"):
+            sl, tp, rr = compute_trade_levels(
+                symbol_norm=symbol_norm,
+                price=price,
+                action=action,
+                risk_pct=risk_pct,
+                reward_pct=reward_pct,
+            )
 
     # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []

@@ -98,7 +98,8 @@ def rsi(series: np.ndarray, period: int = 14) -> np.ndarray:
     return rsi_values
 
 
-def macd(series: np.ndarray, fast: int = 12, slow: int = 26, signal_period: int = 9) -> Tuple[np.ndarray, np.ndarray]:
+def macd(series: np.ndarray, fast: int = 12, slow: int = 26,
+         signal_period: int = 9) -> Tuple[np.ndarray, np.ndarray]:
     if series.size < slow + signal_period:
         raise ValueError("Not enough data for MACD")
     ema_fast = ema(series, fast)
@@ -108,7 +109,8 @@ def macd(series: np.ndarray, fast: int = 12, slow: int = 26, signal_period: int 
     return macd_line, signal_line
 
 
-def bollinger_bands(series: np.ndarray, period: int = 20, num_std: float = 2.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def bollinger_bands(series: np.ndarray, period: int = 20,
+                    num_std: float = 2.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     if series.size < period:
         raise ValueError("Not enough data for Bollinger Bands")
     sma = np.convolve(series, np.ones(period) / period, mode="valid")
@@ -126,14 +128,16 @@ def bollinger_bands(series: np.ndarray, period: int = 20, num_std: float = 2.0) 
     return lower, padded_sma, upper
 
 
-def vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray) -> np.ndarray:
+def vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+         volume: np.ndarray) -> np.ndarray:
     typical_price = (high + low + close) / 3.0
     cumulative_vp = np.cumsum(typical_price * volume)
     cumulative_volume = np.cumsum(volume)
     return cumulative_vp / np.maximum(cumulative_volume, 1e-9)
 
 
-def volume_surge(volume: np.ndarray, lookback: int = 20, threshold: float = 2.0) -> bool:
+def volume_surge(volume: np.ndarray, lookback: int = 20,
+                 threshold: float = 2.0) -> bool:
     if volume.size < lookback + 1:
         return False
     recent = volume[-1]
@@ -147,7 +151,8 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
     return (series[-1] - series[-period - 1]) / series[-period - 1] * 100.0
 
 
-def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) -> np.ndarray:
+def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+        period: int = 14) -> np.ndarray:
     """
     Average True Range لقياس تذبذب السعر.
     نستخدمه لحساب وقف الخسارة والأهداف.
@@ -176,7 +181,8 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, period: int = 14) 
 # Liquidity Map Engine
 # =========================
 
-def _detect_swings(high: np.ndarray, low: np.ndarray, left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
+def _detect_swings(high: np.ndarray, low: np.ndarray,
+                   left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
     """
     يحدد swing highs و swing lows بسيطة (قمة أعلى من الجيران / قاع أقل من الجيران).
     """
@@ -208,7 +214,6 @@ def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[
             continue
         last = levels[-1]
         if abs(p - last["price"]) / max(last["price"], 1e-9) <= tolerance:
-            # ندمج في نفس المستوى
             new_count = last["count"] + 1
             last["price"] = (last["price"] * last["count"] + p) / new_count
             last["count"] = new_count
@@ -219,10 +224,7 @@ def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[
 
 def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
     """
-    يبني خريطة سيولة بسيطة:
-    - يبحث عن swing highs / lows
-    - يكوّن مستويات سيولة فوق السعر (Buy-side liquidity) وتحت السعر (Sell-side liquidity)
-    - يحسب قوة كل منطقة + انحياز السيولة (أعلى / أسفل)
+    يبني خريطة سيولة بسيطة.
     """
     high = ohlcv["high"]
     low = ohlcv["low"]
@@ -235,12 +237,10 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
     high_prices = [high[i] for i in swing_highs]
     low_prices = [low[i] for i in swing_lows]
 
-    # نكوّن مستويات من القمم والقيعان
     high_levels = _cluster_levels(high_prices, tolerance=0.0015)
     low_levels = _cluster_levels(low_prices, tolerance=0.0015)
 
     zones: List[Dict[str, Any]] = []
-
     above_strength = 0.0
     below_strength = 0.0
 
@@ -250,9 +250,7 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         count = int(lvl["count"])
         distance_pct = (price - last_close) / last_close * 100.0
         if distance_pct <= 0:
-            # مستوى أصبح تحت السعر الحالي -> سيولة قديمة
             continue
-        # كل ما كان أقرب للسعر وكل ما تكرر أكثر، تزيد قوة السيولة
         base = min(count * 8.0, 40.0)
         if distance_pct < 1:
             dist_score = 40.0
@@ -267,7 +265,7 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         zones.append(
             {
                 "price": price,
-                "side": "BUY",  # سيولة فوق السعر، عادة يجذب السعر لفوق
+                "side": "BUY",
                 "count": count,
                 "distance_pct": distance_pct,
                 "strength": strength,
@@ -280,7 +278,6 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         count = int(lvl["count"])
         distance_pct = (last_close - price) / last_close * 100.0
         if distance_pct <= 0:
-            # مستوى أصبح فوق السعر -> سيولة قديمة
             continue
         base = min(count * 8.0, 40.0)
         if distance_pct < 1:
@@ -296,7 +293,7 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         zones.append(
             {
                 "price": price,
-                "side": "SELL",  # سيولة تحت السعر، يجذب السعر لتحت
+                "side": "SELL",
                 "count": count,
                 "distance_pct": distance_pct,
                 "strength": strength,
@@ -309,11 +306,11 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         bias = "FLAT"
         liq_score = 0.0
     else:
-        imbalance = (above_strength - below_strength) / total_strength  # من -1 إلى +1
+        imbalance = (above_strength - below_strength) / total_strength
         if imbalance > 0.2:
-            bias = "UP"   # سيولة أقوى فوق السعر -> السوق يميل يجمع سيولة لفوق
+            bias = "UP"
         elif imbalance < -0.2:
-            bias = "DOWN"  # سيولة أقوى تحت السعر -> يميل يجمع سيولة لتحت
+            bias = "DOWN"
         else:
             bias = "FLAT"
         liq_score = abs(imbalance) * 100.0
@@ -391,9 +388,9 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         if 50 <= rsi_last <= 70:
             bullish_points += 1
         elif rsi_last > 70:
-            bearish_points += 1  # overbought
+            bearish_points += 1
         elif rsi_last < 30:
-            bullish_points += 1  # oversold
+            bullish_points += 1
 
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
@@ -416,7 +413,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if abs(change_1) > 6 and vol_surge:
         pump_dump_risk = "HIGH"
 
-    # 🔥 خريطة السيولة لهذا الفريم
+    # خريطة السيولة لهذا الفريم
     liq_map = build_liquidity_map(ohlcv, name)
     liq_bias = liq_map.get("bias", "FLAT")
     liq_score = liq_map.get("score", 0.0)
@@ -438,7 +435,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "change_4": change_4,
             "trend_score": trend_score,
             "pump_dump_risk": pump_dump_risk,
-            # Liquidity info
             "liquidity": liq_map,
             "liq_bias": liq_bias,
             "liq_score": liq_score,
@@ -509,7 +505,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         global_trend = "RANGING"
 
-    # 🔥 تجميع انحياز السيولة الكلي
+    # تجميع انحياز السيولة الكلي
     if liq_above_total + liq_below_total > 0:
         liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
         if liq_imbalance > 0.2:
@@ -534,7 +530,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         r is not None and not np.isnan(r) and r < 30 for r in [rsi_1h, rsi_4h]
     )
 
-    # منطقة عدم التداول
     action = "WAIT"
 
     if score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
@@ -542,7 +537,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     elif score <= 30 and bearish_votes > bullish_votes and not oversold:
         action = "SELL"
 
-    # لو الإشارة عندنا مترددة (بين 60 و 70) نستخدم انحياز السيولة لدفع القرار
     if action == "WAIT" and 60 <= score < 70 and max_pump_risk != "HIGH":
         if liquidity_bias == "UP" and bullish_votes >= bearish_votes:
             action = "BUY"
@@ -572,17 +566,11 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # =========================
-# اختيار نسب المخاطرة / الربح (احتياطي لو حبّينا نستخدمه لاحقاً)
+# اختيار نسب المخاطرة / الربح (احتياطي)
 # =========================
 
-def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
-    """
-    يحدد نسب المخاطرة والربح تلقائياً حسب:
-    - قوة الاتجاه (score + trend)
-    - درجة الثقة
-    - التقلب (من تغيّر السعر في 15m و 1h)
-    - مخاطر Pump/Dump
-    """
+def choose_risk_reward(decision: Dict[str, Any],
+                       tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
     score = decision.get("score", 50)
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk", "LOW")
@@ -599,8 +587,8 @@ def choose_risk_reward(decision: Dict[str, Any], tf_results: Dict[str, Dict[str,
     else:
         vol_level = "HIGH"
 
-    risk_pct = 0.015   # 1.5%
-    reward_pct = 0.03  # 3.0%
+    risk_pct = 0.015
+    reward_pct = 0.03
 
     strong_trend = (score >= 75 and confidence == "HIGH" and trend in ("BULLISH", "BEARISH"))
     medium_trend = (60 <= score < 75)
@@ -673,8 +661,6 @@ def build_trade_levels(last_close: float,
 def generate_signal(symbol: str) -> Dict[str, Any]:
     """
     Main Ultra Engine entrypoint.
-
-    Returns a dict ready to be formatted by the Telegram layer.
     """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
@@ -685,7 +671,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
-            time.sleep(0.1)  # نرفق شوي على Binance
+            time.sleep(0.1)
         except Exception as e:
             tf_results[name] = {
                 "timeframe": name,
@@ -698,18 +684,21 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
-    # نحاول نستخدم إغلاق فريم 1h كسعر مرجعي، وإذا مو موجود نرجع لفريم 15m
-    last_close = tf_results.get("1h", tf_results.get("15m", {})).get("close")
+    # 3) نحدد السعر المرجعي (آخر إغلاق من 1h أو 15m)
+    last_close_arr = tf_results.get("1h", tf_results.get("15m", {})).get("close")
+    if isinstance(last_close_arr, np.ndarray) and last_close_arr.size > 0:
+        last_close = float(last_close_arr[-1])
+    else:
+        last_close = None
 
-    # 3) توليد TP / SL بناءً على السعر والسكور والثقة
     tp = None
     sl = None
-    rr = None  # Risk/Reward
+    rr = None
     risk_pct = None
     reward_pct = None
 
     if last_close is not None:
-        price = float(last_close)
+        price = last_close
 
         if combined["confidence"] == "HIGH":
             risk_pct = 2.0
@@ -726,7 +715,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             reward_mult = 1.5
 
         reward_pct = risk_pct * reward_mult
-
         action = combined["action"]
 
         if action == "BUY":
@@ -750,7 +738,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         )
     )
 
-    # انحياز السيولة الكلي
     liq_bias = combined.get("liquidity_bias")
     liq_score = combined.get("liquidity_score", 0.0)
     if liq_bias == "UP":
@@ -771,11 +758,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     return {
         "symbol": symbol_norm,
-        "last_price": float(last_close) if last_close is not None else None,
+        "last_price": last_close,
         "timeframes": tf_results,
         "decision": combined,
         "reason": explanation,
-        # خطة الصفقة
         "tp": tp,
         "sl": sl,
         "rr": rr,

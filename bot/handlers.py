@@ -2,19 +2,14 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from .engine import generate_signal
-from bot.market import get_price  # أو من .market حسب ما تستخدم في المشروع
+from bot.market import get_price  # أو من .market إذا مركبه كـ package
 
-
-# =========================
 # /start
-# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 B7A Trading Bot is LIVE! 🔥")
+    await update.message.reply_text("🔥 B7A Ultra Bot is LIVE! 🔥")
 
 
-# =========================
 # /help
-# =========================
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 🤖 قائمة الأوامر:
@@ -27,9 +22,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-# =========================
 # /price
-# =========================
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("استخدم: /price BTC أو /price sol")
@@ -44,11 +37,9 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("صار خطأ غير متوقع أثناء جلب السعر 😢")
 
 
-# =========================
-# /signal  (Ultra Engine)
-# =========================
+# /signal  (Ultra AI)
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1) العملة
+    # 1) نقرأ العملة من الأمر
     if len(context.args) == 0:
         await update.message.reply_text(
             "🚨 استخدم الأمر بالشكل التالي:\n"
@@ -83,6 +74,8 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     trend      = decision.get("trend", "RANGING")
     confidence = decision.get("confidence", "LOW")
     pump_risk  = decision.get("pump_dump_risk", "LOW")
+    liq_bias   = decision.get("liquidity_bias", "FLAT")
+    liq_score  = decision.get("liquidity_score", 0.0)
 
     tp         = signal_data.get("tp")
     sl         = signal_data.get("sl")
@@ -130,10 +123,11 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"قوة الإشارة (Score): {score}/100\n"
         f"درجة الثقة: {confidence}\n"
         f"مخاطرة حركة حادة (Pump/Dump): {pump_risk}\n"
+        f"انحياز السيولة: {liq_bias} (Liquidity Score ≈ {liq_score:.0f})\n"
     )
 
-    # ✅ عرض TP/SL و R:R وخطة المخاطرة
-    if tp is not None and sl is not None:
+    # ✅ خطة الصفقة حسب نوع القرار
+    if action in ("BUY", "SELL") and tp is not None and sl is not None:
         msg += "\n🎯 خطة الصفقة (آلية):\n"
         msg += f"• وقف الخسارة (SL): {sl:.4f}\n"
         msg += f"• هدف الربح (TP): {tp:.4f}\n"
@@ -141,8 +135,13 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"• مخاطرة تقريبية: {risk_pct:.1f}% | هدف ربح: {reward_pct:.1f}%\n"
         if rr is not None:
             msg += f"• نسبة العائد إلى المخاطرة R:R ≈ {rr}:1\n"
+    elif action == "WAIT":
+        msg += (
+            "\n🚦 النظام حالياً في وضع **انتظار**، لا توجد صفقة واضحة بنسبة كافية، "
+            "لذلك لم يتم حساب TP/SL لهذه الإشارة.\n"
+        )
     else:
-        msg += "\n(لم يتم حساب TP/SL لهذه الإشارة بسبب نقص البيانات.)\n"
+        msg += "\n(لم يتم حساب TP/SL لهذه الإشارة.)\n"
 
     msg += "\n🧠 ملخص الفريمات:\n" + tf_summary
 

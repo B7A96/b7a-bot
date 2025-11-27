@@ -6,6 +6,8 @@ from telegram.ext import ContextTypes
 from .engine import generate_signal
 from bot.market import get_price
 from bot.scanner import get_top_usdt_symbols
+from bot.analytics import get_trades_summary
+
 
 # قائمة مراقبة ديناميكية (في الذاكرة)
 WATCHLIST: Set[str] = set(["BTC", "ETH", "SOL", "DOGE", "TON", "BNB"])
@@ -33,8 +35,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /add BTC – إضافة عملة إلى قائمة المراقبة
 /remove BTC – حذف عملة من قائمة المراقبة
 /list – عرض قائمة المراقبة الحالية
+
+/stats – ملخص أداء الإشارات من اللوق (B7A Ultra Analytics)
 """
     await update.message.reply_text(text)
+
 
 
 # /price
@@ -434,3 +439,8 @@ async def list_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     coins = ", ".join(sorted(WATCHLIST))
     await update.message.reply_text(f"👀 قائمة المراقبة الحالية:\n{coins}")
+    
+# /stats – ملخص أداء الإشارات من اللوق
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = get_trades_summary()
+    await update.message.reply_text(text)

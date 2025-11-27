@@ -77,7 +77,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     liquidity_bias = decision.get("liquidity_bias", "FLAT")
     liquidity_score = decision.get("liquidity_score", 0.0)
 
-    # الجديد
     grade = decision.get("grade", "C")
     no_trade = decision.get("no_trade", False)
     market_regime = decision.get("market_regime", "UNKNOWN")
@@ -88,84 +87,114 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     risk_pct = signal_data.get("risk_pct")
     reward_pct = signal_data.get("reward_pct")
 
-    # ---------------------------
-    # 🧠 عنوان الإشارة
-    # ---------------------------
-    msg = f"📈 إشارة {signal_data.get('symbol', symbol_fallback)} – B7A Ultra Engine\n\n"
+    symbol_text = signal_data.get("symbol", symbol_fallback)
 
-    # السعر
+    # =========================
+    # HEADER
+    # =========================
+    lines: List[str] = []
+
+    lines.append(f"<b>📈 B7A Ultra Signal – {symbol_text}</b>")
+    lines.append("<i>Powered by B7A Ultra Engine</i>")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+
+    # السعر الحالي
     if last_price is not None:
-        msg += f"💰 السعر الحالي: {last_price:.4f} USDT\n"
+        lines.append(f"💰 <b>السعر الحالي:</b> {last_price:.4f} USDT")
 
-    # Grade + Market Regime
-    msg += f"🏆 تصنيف الإشارة (Grade): {grade}\n"
-    msg += f"🌍 وضع السوق العام: {market_regime}\n"
+    # Grade + وضع السوق
+    lines.append(f"🏆 <b>Grade:</b> {grade}")
+    lines.append(f"🌍 <b>وضع السوق العام:</b> {market_regime}")
 
     if no_trade:
-        msg += "⚠️ منطقة No-Trade: هذه الإشارة ضعيفة حسب فلتر B7A Ultra.\n"
+        lines.append("⚠️ <b>No-Trade Zone:</b> هذه الإشارة مصنّفة ضعيفة حسب فلتر B7A Ultra.")
 
-    msg += "\n"
+    lines.append("")
 
-    # ---------------------------
-    # 🔥 قرار البوت
-    # ---------------------------
-    msg += (
-        f"🎯 قرار النظام: {action}\n"
-        f"📊 قوة الإشارة (Score): {score}/100\n"
-        f"📈 الاتجاه العام: {trend}\n"
-        f"🧪 الثقة: {confidence}\n"
-        f"🧨 Pump/Dump Risk: {pump_risk}\n"
+    # =========================
+    # قرار النظام
+    # =========================
+    lines.append("<b>🎯 قرار النظام</b>")
+    lines.append(f"• Action: <b>{action}</b>")
+    lines.append(f"• Score: <b>{score:.1f}/100</b>")
+    lines.append(f"• Trend: <b>{trend}</b>")
+    lines.append(f"• Confidence: <b>{confidence}</b>")
+    lines.append(f"• Pump/Dump Risk: <b>{pump_risk}</b>")
+
+    # السيولة
+    lines.append("")
+    lines.append("<b>💧 السيولة (Liquidity)</b>")
+    lines.append(
+        f"• Bias: <b>{liquidity_bias}</b> | Liquidity Score ≈ <b>{liquidity_score:.0f}</b>"
     )
 
-    # ---------------------------
-    # 💧 السيولة
-    # ---------------------------
-    msg += f"\n💧 Liquidity Bias: {liquidity_bias} (Score ≈ {liquidity_score:.0f})\n"
+    # =========================
+    # ملخص الفريمات
+    # =========================
+    lines.append("")
+    lines.append("<b>🧠 ملخص الفريمات</b>")
 
-    # ---------------------------
-    # 🔍 فحص الفريمات (ملخص)
-    # ---------------------------
-    msg += "\n🧠 ملخص الفريمات:\n"
     order = ["15m", "1h", "4h", "1d"]
     for tf in order:
         fr = tf_data.get(tf, {})
-        reg = fr.get("market_regime", "?")
-        bo = "Break ↑" if fr.get("is_breakout_up") else ("Break ↓" if fr.get("is_breakout_down") else "–")
-        div = (
-            "Bullish Div" if fr.get("has_bull_div")
-            else ("Bearish Div" if fr.get("has_bear_div") else "–")
-        )
-        msg += (
+        if not fr:
+            continue
+
+        reg = fr.get("market_regime", "UNKNOWN")
+
+        if fr.get("is_breakout_up"):
+            bo = "Break ↑"
+        elif fr.get("is_breakout_down"):
+            bo = "Break ↓"
+        else:
+            bo = "–"
+
+        if fr.get("has_bull_div"):
+            div = "Bullish Div"
+        elif fr.get("has_bear_div"):
+            div = "Bearish Div"
+        else:
+            div = "–"
+
+        lines.append(
             f"• {tf} | Trend: {fr.get('trend')} "
-            f"| Score: {fr.get('trend_score')} "
-            f"| Regime: {reg} | {bo} | {div}\n"
+            f"| Score: {fr.get('trend_score', 50)} "
+            f"| Regime: {reg} | {bo} | {div}"
         )
 
-    # ---------------------------
-    # 🎯 TP / SL
-    # ---------------------------
-    msg += "\n🎯 خطة الصفقة:\n"
-    if tp and sl:
-        msg += (
-            f"• الهدف (TP): {tp}\n"
-            f"• وقف الخسارة (SL): {sl}\n"
-            f"• R:R ≈ {rr}\n"
-        )
-        if risk_pct and reward_pct:
-            msg += f"• مخاطرة تقريبية: {risk_pct:.1f}% | هدف ربح: {reward_pct:.1f}%\n"
+    # =========================
+    # خطة الصفقة
+    # =========================
+    lines.append("")
+    lines.append("<b>🎯 خطة الصفقة</b>")
+
+    if tp is not None and sl is not None:
+        lines.append(f"• TP (الهدف): <b>{tp}</b>")
+        lines.append(f"• SL (وقف الخسارة): <b>{sl}</b>")
+        if rr is not None:
+            lines.append(f"• R:R ≈ <b>{rr}</b>")
+        if risk_pct is not None and reward_pct is not None:
+            lines.append(
+                f"• مخاطرة تقريبية: <b>{risk_pct:.1f}%</b> | "
+                f"هدف ربح: <b>{reward_pct:.1f}%</b>"
+            )
     else:
-        msg += "لا توجد مستويات دخول واضحة (No-Trade).\n"
+        lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
 
-    # ---------------------------
-    # 📌 ملخص ذكي
-    # ---------------------------
-    msg += "\n📌 ملخص ذكي:\n"
-    msg += reason + "\n\n"
+    # =========================
+    # ملخص ذكي + تحذير
+    # =========================
+    if reason:
+        lines.append("")
+        lines.append("<b>📌 ملخص ذكي من المحرك:</b>")
+        lines.append(reason)
 
-    msg += "⚠️ هذا تحليل آلي – استخدم إدارة مخاطر دائمًا.\n"
-    msg += "— B7A Ultra Engine"
+    lines.append("")
+    lines.append("⚠️ هذا تحليل آلي – استخدم إدارة مخاطر دائماً.")
+    lines.append("— <b>B7A Ultra Engine</b>")
 
-    return msg
+    return "\n".join(lines)
+
 
 
 # /signal

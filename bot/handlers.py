@@ -2,6 +2,8 @@ from typing import Dict, Any, List, Set
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.constants import ParseMode
+
 
 from .engine import generate_signal
 from bot.market import get_price
@@ -484,7 +486,12 @@ async def list_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /stats – ملخص أداء الإشارات من اللوق
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = get_trades_summary()
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
 
 
 # /radar – رادار ذكي لأقوى فرص A / A+

@@ -90,12 +90,12 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     symbol_text = signal_data.get("symbol", symbol_fallback)
 
     # =========================
-    # HEADER
+    # HEADER الفخم
     # =========================
     lines: List[str] = []
 
     lines.append(f"<b>📈 B7A Ultra Signal – {symbol_text}</b>")
-    lines.append("<i>Powered by B7A Ultra Engine</i>")
+    lines.append("<i>POWERED BY B7A</i>")
     lines.append("━━━━━━━━━━━━━━━━━━")
 
     # السعر الحالي
@@ -182,7 +182,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
         lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
 
     # =========================
-    # ملخص ذكي + تحذير
+    # ملخص ذكي + تحذير + براند
     # =========================
     if reason:
         lines.append("")
@@ -191,7 +191,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     lines.append("")
     lines.append("⚠️ هذا تحليل آلي – استخدم إدارة مخاطر دائماً.")
-    lines.append("— <b>B7A Ultra Engine</b>")
+    lines.append("<i>POWERED BY B7A</i>")
 
     return "\n".join(lines)
 
@@ -240,11 +240,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
-        msg,
-        reply_markup=reply_markup,
-        parse_mode="HTML",
-    )
+    await update.message.reply_text(msg, reply_markup=reply_markup)
 
 
 # زر تحديث الإشارة
@@ -283,11 +279,7 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
-        msg,
-        reply_markup=reply_markup,
-        parse_mode="HTML",
-    )
+    await query.edit_message_text(msg, reply_markup=reply_markup)
 
 
 # /scan – Smart Scanner (Top Volume)
@@ -561,7 +553,10 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         risk_pct,
         reward_pct,
     ) in top:
-        line = f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | Regime: {regime} | Liquidity: {liq_bias}"
+        line = (
+            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} "
+            f"| Regime: {regime} | Liquidity: {liq_bias}"
+        )
         if rr is not None:
             line += f" | R:R ≈ {rr}"
         if risk_pct is not None and reward_pct is not None:

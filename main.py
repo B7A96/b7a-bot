@@ -44,10 +44,13 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("add", add_symbol))
     app.add_handler(CommandHandler("remove", remove_symbol))
     app.add_handler(CommandHandler("list", list_watchlist))
+    app.add_handler(CommandHandler("stats", stats))
+
 
     # زر تحديث الإشارة
     app.add_handler(CallbackQueryHandler(refresh_signal, pattern=r"^refresh\|"))
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+
 

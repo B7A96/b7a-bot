@@ -606,6 +606,12 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 # =========================
 
 def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    دمج الفريمات في قرار واحد مع Ultra Filter V2:
+    - يشدد على توافق الفريمات
+    - يعتمد على فريم مرجعي (4h / 1d)
+    - يرفع جودة Grade ويقلل الإشارات العشوائية
+    """
     weights = {
         "15m": 0.2,
         "1h": 0.3,
@@ -679,6 +685,10 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         base_score = score_sum / total_weight
     else:
         base_score = 50.0
+
+    # نسب توافق الاتجاه بين الفريمات
+    bull_align = bullish_votes / total_weight if total_weight > 0 else 0.0
+    bear_align = bearish_votes / total_weight if total_weight > 0 else 0.0
 
     # ترند عام
     if bullish_votes > bearish_votes:
@@ -762,20 +772,56 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     combined_score = max(0.0, min(100.0, combined_score))
 
     # =========================
+    # فريم مرجعي قوي (Anchor)
+    # =========================
+    strong_bull_anchor = (
+        tf_data.get("4h", {}).get("trend") == "BULLISH"
+        and tf_data.get("4h", {}).get("trend_score", 50) >= 60
+    ) or (
+        tf_data.get("1d", {}).get("trend") == "BULLISH"
+        and tf_data.get("1d", {}).get("trend_score", 50) >= 55
+    )
+
+    strong_bear_anchor = (
+        tf_data.get("4h", {}).get("trend") == "BEARISH"
+        and tf_data.get("4h", {}).get("trend_score", 50) >= 60
+    ) or (
+        tf_data.get("1d", {}).get("trend") == "BEARISH"
+        and tf_data.get("1d", {}).get("trend_score", 50) >= 55
+    )
+
+    # =========================
     # اتخاذ قرار BUY / SELL / WAIT
     # =========================
     action = "WAIT"
 
-    if combined_score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
+    # عشان الإشارة تكون BUY لازم:
+    # - سكور عالي
+    # - توافق فريمات قوي مع الاتجاه
+    # - فريم مرجعي داعم
+    if (
+        combined_score >= 72
+        and bull_align >= 0.6
+        and not overbought
+        and max_pump_risk != "HIGH"
+        and strong_bull_anchor
+    ):
         action = "BUY"
-    elif combined_score <= 30 and bearish_votes > bullish_votes and not oversold:
+
+    # شروط SELL المعاكسة
+    if (
+        combined_score <= 28
+        and bear_align >= 0.6
+        and not oversold
+        and strong_bear_anchor
+    ):
         action = "SELL"
 
-    # المنطقة الرمادية → نحتكم للسيولة
-    if action == "WAIT" and 60 <= combined_score < 70 and max_pump_risk != "HIGH":
-        if liquidity_bias == "UP" and bullish_votes >= bearish_votes:
+    # المنطقة الرمادية → نحتكم للسيولة إذا في أفضلية واضحة
+    if action == "WAIT" and 60 <= combined_score < 72 and max_pump_risk != "HIGH":
+        if liquidity_bias == "UP" and bull_align >= 0.6 and strong_bull_anchor:
             action = "BUY"
-        elif liquidity_bias == "DOWN" and bearish_votes >= bullish_votes:
+        elif liquidity_bias == "DOWN" and bear_align >= 0.6 and strong_bear_anchor:
             action = "SELL"
 
     # الثقة
@@ -794,19 +840,36 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     # =========================
     # Grade + No-Trade
     # =========================
-    if combined_score >= 75 and confidence == "HIGH" and max_pump_risk == "LOW":
+    if (
+        combined_score >= 80
+        and confidence == "HIGH"
+        and max_pump_risk == "LOW"
+        and ((action == "BUY" and bull_align >= 0.7) or (action == "SELL" and bear_align >= 0.7))
+    ):
         grade = "A+"
-    elif combined_score >= 65 and max_pump_risk != "HIGH":
+    elif (
+        combined_score >= 70
+        and max_pump_risk != "HIGH"
+        and confidence in ("HIGH", "MEDIUM")
+        and (bull_align >= 0.55 or bear_align >= 0.55)
+    ):
         grade = "A"
-    elif combined_score >= 55:
+    elif combined_score >= 58:
         grade = "B"
     else:
         grade = "C"
 
     no_trade = False
-    if grade in ("C",) or confidence == "LOW" or max_pump_risk == "HIGH":
+
+    # شروط المنطقة المحظورة No-Trade
+    if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
         no_trade = True
+
     if action == "WAIT":
+        no_trade = True
+
+    # لو السيولة تقريباً متعادلة تماماً → نعتبرها No-Trade
+    if liquidity_score < 5:
         no_trade = True
 
     return {
@@ -820,7 +883,11 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "market_regime": global_regime,
         "grade": grade,
         "no_trade": no_trade,
+        # معلومات إضافية مفيدة لو حبينا نعرضها لاحقاً
+        "bull_align": round(float(bull_align), 2),
+        "bear_align": round(float(bear_align), 2),
     }
+
 
 
 # =========================

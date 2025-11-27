@@ -19,6 +19,7 @@ from bot.handlers import (
     remove_symbol,
     list_watchlist,
     stats,
+    radar,  # <-- أضفناها هنا
 )
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -39,18 +40,18 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("scan", scan))
     app.add_handler(CommandHandler("scan_watchlist", scan_watchlist))
     app.add_handler(CommandHandler("daily", daily))
+    app.add_handler(CommandHandler("radar", radar))  # <-- هنا
 
     # إدارة الـ Watchlist
     app.add_handler(CommandHandler("add", add_symbol))
     app.add_handler(CommandHandler("remove", remove_symbol))
     app.add_handler(CommandHandler("list", list_watchlist))
-    app.add_handler(CommandHandler("stats", stats))
 
+    # الإحصائيات
+    app.add_handler(CommandHandler("stats", stats))
 
     # زر تحديث الإشارة
     app.add_handler(CallbackQueryHandler(refresh_signal, pattern=r"^refresh\|"))
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
-
-

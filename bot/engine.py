@@ -972,6 +972,17 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
+
+    grade = combined.get("grade")
+    no_trade = combined.get("no_trade", False)
+    market_regime = combined.get("market_regime", "UNKNOWN")
+
+    if grade:
+        reason_lines.append(f"تصنيف الإشارة (Grade): {grade}")
+    reason_lines.append(f"وضع السوق العام: {market_regime}")
+    if no_trade:
+        reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
+
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
     reason_lines.append(
         "أقوى الفريمات: "
@@ -1011,4 +1022,3 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
     }
-    

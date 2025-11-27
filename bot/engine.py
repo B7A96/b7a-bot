@@ -339,17 +339,22 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     info: Dict[str, Any] = {"timeframe": name}
 
+    # EMA 200
     try:
         ema200 = ema(close, 200)[-1]
     except ValueError:
         ema200 = float("nan")
 
+    # RSI
+    rsi_arr = None
     try:
         rsi_arr = rsi(close, 14)
         rsi_last = float(rsi_arr[-1])
     except ValueError:
         rsi_last = float("nan")
+        rsi_arr = None
 
+    # MACD
     try:
         macd_line, sig_line = macd(close)
         macd_last = float(macd_line[-1])
@@ -358,6 +363,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         macd_last = float("nan")
         macd_signal_last = float("nan")
 
+    # Bollinger Bands
     try:
         lower_bb, mid_bb, upper_bb = bollinger_bands(close)
         lower_last = float(lower_bb[-1])
@@ -366,6 +372,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         lower_last = float("nan")
         upper_last = float("nan")
 
+    # VWAP
     vwap_arr = vwap(high, low, close, volume)
     vwap_last = float(vwap_arr[-1])
 
@@ -378,12 +385,14 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     last_close = float(close[-1])
 
+    # اتجاه بالنسبة للـ EMA200
     if not np.isnan(ema200):
         if last_close > ema200:
             bullish_points += 1
         else:
             bearish_points += 1
 
+    # سلوك RSI
     if not np.isnan(rsi_last):
         if 50 <= rsi_last <= 70:
             bullish_points += 1
@@ -392,19 +401,104 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         elif rsi_last < 30:
             bullish_points += 1
 
+    # MACD Cross
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
             bullish_points += 1
         else:
             bearish_points += 1
 
+    # Bollinger Touch
     if not np.isnan(lower_last) and not np.isnan(upper_last):
         if last_close <= lower_last:
             bullish_points += 1
         elif last_close >= upper_last:
             bearish_points += 1
 
+    # =========================
+    # Market Regime Detector
+    # =========================
+    try:
+        atr_vals = atr(high, low, close, period=14)
+        atr_last = float(atr_vals[-1])
+    except Exception:
+        atr_last = float("nan")
+
+    distance_from_ema200 = (
+        abs(last_close - ema200) if not np.isnan(ema200) else 0.0
+    )
+
+    if (
+        not np.isnan(ema200)
+        and not np.isnan(atr_last)
+        and distance_from_ema200 > atr_last * 1.2
+        and atr_last > (0.002 * last_close)  # ATR > 0.2% من السعر
+    ):
+        market_regime = "TRENDING"
+    else:
+        market_regime = "RANGING"
+
+    # =========================
+    # Breakout Detector
+    # =========================
+    lookback = min(20, len(close))
+    if lookback < 5:
+        recent_high = last_close
+        recent_low = last_close
+    else:
+        recent_high = float(np.max(high[-lookback:]))
+        recent_low = float(np.min(low[-lookback:]))
+
+    is_breakout_up = False
+    is_breakout_down = False
+
+    if last_close > recent_high and change_1 > 0:
+        is_breakout_up = True
+
+    if last_close < recent_low and change_1 < 0:
+        is_breakout_down = True
+
+    # =========================
+    # RSI Divergence
+    # =========================
+    has_bull_div = False
+    has_bear_div = False
+
+    if rsi_arr is not None and len(close) >= 20:
+        # نستخدم نقطة قبل 10 شموع كنقطة مقارنة بسيطة
+        prev_idx = -10
+
+        prev_low = close[prev_idx]
+        curr_low = close[-1]
+        prev_rsi = rsi_arr[prev_idx]
+        curr_rsi = rsi_arr[-1]
+
+        if not np.isnan(prev_rsi) and not np.isnan(curr_rsi):
+            # Bullish Divergence: السعر ينزل، RSI يطلع
+            if curr_low < prev_low and curr_rsi > prev_rsi:
+                has_bull_div = True
+
+            # Bearish Divergence: السعر يطلع، RSI ينزل
+            if curr_low > prev_low and curr_rsi < prev_rsi:
+                has_bear_div = True
+
+    # نكافئ/نعاقب حسب الدايفرجنس
+    if has_bull_div:
+        bullish_points += 1
+    if has_bear_div:
+        bearish_points += 1
+
+    # =========================
+    # Trend Score + Pump/Dump
+    # =========================
     trend_score = (bullish_points - bearish_points) * 10 + 50
+
+    # تعديل بسيط للترند حسب وضع السوق والاختراق
+    if market_regime == "TRENDING" and (is_breakout_up or is_breakout_down):
+        trend_score += 5
+    if market_regime == "RANGING" and (is_breakout_up or is_breakout_down):
+        trend_score -= 5
+
     trend_score = max(0, min(100, trend_score))
 
     pump_dump_risk = "LOW"
@@ -440,6 +534,12 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "liq_score": liq_score,
             "liq_above": liq_above,
             "liq_below": liq_below,
+            # إضافات الذكاء الجديد
+            "market_regime": market_regime,
+            "is_breakout_up": is_breakout_up,
+            "is_breakout_down": is_breakout_down,
+            "has_bull_div": has_bull_div,
+            "has_bear_div": has_bear_div,
         }
     )
 
@@ -451,6 +551,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         info["trend"] = "RANGING"
 
     return info
+
 
 
 # =========================
@@ -800,3 +901,4 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
     }
+    

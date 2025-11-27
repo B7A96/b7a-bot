@@ -196,7 +196,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     return "\n".join(lines)
 
 
-
 # /signal
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) == 0:
@@ -241,7 +240,11 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(msg, reply_markup=reply_markup)
+    await update.message.reply_text(
+        msg,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
 
 
 # زر تحديث الإشارة
@@ -280,7 +283,11 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(msg, reply_markup=reply_markup)
+    await query.edit_message_text(
+        msg,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
 
 
 # /scan – Smart Scanner (Top Volume)

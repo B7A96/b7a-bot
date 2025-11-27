@@ -8,7 +8,6 @@ from bot.market import get_price
 from bot.scanner import get_top_usdt_symbols
 from bot.analytics import get_trades_summary
 
-
 # قائمة مراقبة ديناميكية (في الذاكرة)
 WATCHLIST: Set[str] = set(["BTC", "ETH", "SOL", "DOGE", "TON", "BNB"])
 
@@ -31,6 +30,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /scan – فحص أعلى عملات USDT من حيث الفوليوم وإظهار أفضل الفرص
 /scan_watchlist – فحص قائمة المراقبة الخاصة فيك فقط
 /daily – تقرير يومي مختصر عن السوق
+/radar – رادار ذكي لأقوى فرص A / A+ في السوق كامل
 
 /add BTC – إضافة عملة إلى قائمة المراقبة
 /remove BTC – حذف عملة من قائمة المراقبة
@@ -39,7 +39,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /stats – ملخص أداء الإشارات من اللوق (B7A Ultra Analytics)
 """
     await update.message.reply_text(text)
-
 
 
 # /price
@@ -169,7 +168,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     return msg
 
 
-
 # /signal
 async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) == 0:
@@ -274,8 +272,9 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
+            grade = decision.get("grade", "C")
             if action != "WAIT":
-                results.append((symbol, action, score, decision))
+                results.append((symbol, action, score, grade, decision))
         except Exception as e:
             print("Scan error for", symbol, ":", e)
             continue
@@ -288,11 +287,12 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top = results[:5]
 
     lines = ["📊 أفضل الفرص الحالية (Top Volume Scanner):\n"]
-    for symbol, action, score, decision in top:
+    for symbol, action, score, grade, decision in top:
         trend = decision.get("trend", "RANGING")
         pump = decision.get("pump_dump_risk", "LOW")
         lines.append(
-            f"• {symbol}: {action} | Score: {score:.0f} | Trend: {trend} | Pump: {pump}"
+            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | "
+            f"Trend: {trend} | Pump: {pump}"
         )
 
     lines.append("\nاستخدم /signal BTC مثلاً لعرض تحليل مفصل لأي عملة.")
@@ -315,8 +315,9 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
+            grade = decision.get("grade", "C")
             if action != "WAIT":
-                results.append((symbol, action, score, decision))
+                results.append((symbol, action, score, grade, decision))
         except Exception as e:
             print("Watchlist scan error for", symbol, ":", e)
             continue
@@ -329,11 +330,12 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     top = results[:5]
 
     lines = ["📌 أفضل الفرص داخل قائمة المراقبة:\n"]
-    for symbol, action, score, decision in top:
+    for symbol, action, score, grade, decision in top:
         trend = decision.get("trend", "RANGING")
         pump = decision.get("pump_dump_risk", "LOW")
         lines.append(
-            f"• {symbol}: {action} | Score: {score:.0f} | Trend: {trend} | Pump: {pump}"
+            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | "
+            f"Trend: {trend} | Pump: {pump}"
         )
 
     lines.append("\nتقدر توسع التحليل باستخدام /signal BTC مثلاً.")
@@ -387,7 +389,10 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_lines.append("🔥 أفضل 3 فرص اليوم:")
         for symbol, action, score, decision in best:
             trend = decision.get("trend", "RANGING")
-            msg_lines.append(f"• {symbol}: {action} | Score: {score:.0f} | Trend: {trend}")
+            grade = decision.get("grade", "C")
+            msg_lines.append(
+                f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | Trend: {trend}"
+            )
     else:
         msg_lines.append("ما في فرص قوية جداً اليوم حسب الفلتر الحالي (الكل تقريباً WAIT).")
 
@@ -439,8 +444,93 @@ async def list_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     coins = ", ".join(sorted(WATCHLIST))
     await update.message.reply_text(f"👀 قائمة المراقبة الحالية:\n{coins}")
-    
+
+
 # /stats – ملخص أداء الإشارات من اللوق
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = get_trades_summary()
     await update.message.reply_text(text)
+
+
+# /radar – رادار ذكي لأقوى فرص A / A+
+async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚨 جارِ تشغيل B7A Ultra Radar للبحث عن أقوى فرص A / A+ ...")
+
+    try:
+        symbols = get_top_usdt_symbols(limit=80)
+    except Exception as e:
+        print("Radar top volume error:", e)
+        await update.message.reply_text("⚠️ ما قدرت أجيب قائمة العملات من Binance حالياً.")
+        return
+
+    results = []
+    for symbol in symbols:
+        try:
+            data = generate_signal(symbol)
+            decision = data.get("decision", {})
+            grade = decision.get("grade", "C")
+            no_trade = decision.get("no_trade", False)
+            action = decision.get("action", "WAIT")
+            score = decision.get("score", 50)
+
+            if grade not in ("A", "A+"):
+                continue
+            if no_trade or action == "WAIT":
+                continue
+
+            market_regime = decision.get("market_regime", "UNKNOWN")
+            liq_bias = decision.get("liquidity_bias", "FLAT")
+            rr = data.get("rr")
+            risk_pct = data.get("risk_pct")
+            reward_pct = data.get("reward_pct")
+
+            results.append(
+                (
+                    symbol,
+                    action,
+                    score,
+                    grade,
+                    market_regime,
+                    liq_bias,
+                    rr,
+                    risk_pct,
+                    reward_pct,
+                )
+            )
+        except Exception as e:
+            print("Radar error for", symbol, ":", e)
+            continue
+
+    if not results:
+        await update.message.reply_text(
+            "حالياً ما في فرص A/A+ واضحة حسب شروط B7A Ultra Radar.\n"
+            "جرّب بعد شوي أو في جلسة مختلفة."
+        )
+        return
+
+    results.sort(key=lambda x: x[2], reverse=True)
+    top = results[:10]
+
+    lines: List[str] = []
+    lines.append("🎯 B7A Ultra Radar – أقوى 10 فرص A / A+:\n")
+
+    for (
+        symbol,
+        action,
+        score,
+        grade,
+        regime,
+        liq_bias,
+        rr,
+        risk_pct,
+        reward_pct,
+    ) in top:
+        line = f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | Regime: {regime} | Liquidity: {liq_bias}"
+        if rr is not None:
+            line += f" | R:R ≈ {rr}"
+        if risk_pct is not None and reward_pct is not None:
+            line += f" | Risk ~{risk_pct:.1f}% / Reward ~{reward_pct:.1f}%"
+        lines.append(line)
+
+    lines.append("\nاستخدم /signal BTC مثلاً لعرض تفاصيل أي عملة من القائمة.")
+    await update.message.reply_text("\n".join(lines))

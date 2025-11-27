@@ -60,7 +60,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("صار خطأ غير متوقع أثناء جلب السعر 😢")
 
 
-# ====== دالة داخلية تبني نص الإشارة ======
+# ====== دالة داخلية تبني نص الإشارة (Dark Gold Style) ======
 
 def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> str:
     decision = signal_data.get("decision", {})
@@ -90,13 +90,13 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     symbol_text = signal_data.get("symbol", symbol_fallback)
 
     # =========================
-    # HEADER الفخم
+    # HEADER – Dark Gold
     # =========================
     lines: List[str] = []
 
-    lines.append(f"<b>📈 B7A Ultra Signal – {symbol_text}</b>")
-    lines.append("<i>POWERED BY B7A</i>")
-    lines.append("━━━━━━━━━━━━━━━━━━")
+    lines.append(f"⚜️ <b>B7A Ultra Signal – {symbol_text}</b>")
+    lines.append("<i>POWERED BY B7A · Dark Gold Edition</i>")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
 
     # السعر الحالي
     if last_price is not None:
@@ -109,12 +109,12 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     if no_trade:
         lines.append("⚠️ <b>No-Trade Zone:</b> هذه الإشارة مصنّفة ضعيفة حسب فلتر B7A Ultra.")
 
-    lines.append("")
+    lines.append("")  # سطر فاصل
 
     # =========================
     # قرار النظام
     # =========================
-    lines.append("<b>🎯 قرار النظام</b>")
+    lines.append("🎯 <b>قرار النظام</b>")
     lines.append(f"• Action: <b>{action}</b>")
     lines.append(f"• Score: <b>{score:.1f}/100</b>")
     lines.append(f"• Trend: <b>{trend}</b>")
@@ -123,7 +123,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     # السيولة
     lines.append("")
-    lines.append("<b>💧 السيولة (Liquidity)</b>")
+    lines.append("💧 <b>السيولة (Liquidity)</b>")
     lines.append(
         f"• Bias: <b>{liquidity_bias}</b> | Liquidity Score ≈ <b>{liquidity_score:.0f}</b>"
     )
@@ -132,7 +132,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     # ملخص الفريمات
     # =========================
     lines.append("")
-    lines.append("<b>🧠 ملخص الفريمات</b>")
+    lines.append("🧠 <b>ملخص الفريمات</b>")
 
     order = ["15m", "1h", "4h", "1d"]
     for tf in order:
@@ -166,7 +166,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     # خطة الصفقة
     # =========================
     lines.append("")
-    lines.append("<b>🎯 خطة الصفقة</b>")
+    lines.append("🎯 <b>خطة الصفقة</b>")
 
     if tp is not None and sl is not None:
         lines.append(f"• TP (الهدف): <b>{tp}</b>")
@@ -182,16 +182,15 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
         lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
 
     # =========================
-    # ملخص ذكي + تحذير + براند
+    # ملخص ذكي + تحذير
     # =========================
     if reason:
         lines.append("")
-        lines.append("<b>📌 ملخص ذكي من المحرك:</b>")
+        lines.append("📌 <b>ملخص ذكي من المحرك:</b>")
         lines.append(reason)
 
     lines.append("")
     lines.append("⚠️ هذا تحليل آلي – استخدم إدارة مخاطر دائماً.")
-    lines.append("<i>POWERED BY B7A</i>")
 
     return "\n".join(lines)
 
@@ -240,7 +239,11 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(msg, reply_markup=reply_markup)
+    await update.message.reply_text(
+        msg,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
 
 
 # زر تحديث الإشارة
@@ -279,7 +282,11 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(msg, reply_markup=reply_markup)
+    await query.edit_message_text(
+        msg,
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
 
 
 # /scan – Smart Scanner (Top Volume)
@@ -554,8 +561,8 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reward_pct,
     ) in top:
         line = (
-            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} "
-            f"| Regime: {regime} | Liquidity: {liq_bias}"
+            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | "
+            f"Regime: {regime} | Liquidity: {liq_bias}"
         )
         if rr is not None:
             line += f" | R:R ≈ {rr}"

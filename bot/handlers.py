@@ -109,7 +109,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     msg = f"📈 إشارة {signal_data.get('symbol', symbol_fallback)} من B7A Ultra Bot 🇰🇼\n\n"
 
     if last_price is not None:
-        msg += f"USDT {last_price:.4f} السعر الحالي:\n\n"
+    msg += f"السعر الحالي: {last_price:.4f} USDT\n\n"
 
     msg += (
         f"قرار النظام: {action}\n"

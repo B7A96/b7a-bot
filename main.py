@@ -18,6 +18,7 @@ from bot.handlers import (
     add_symbol,
     remove_symbol,
     list_watchlist,
+    stats,
 )
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -49,3 +50,4 @@ if __name__ == "__main__":
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+

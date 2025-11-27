@@ -3,6 +3,9 @@ from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 import requests
+import csv
+import os
+from datetime import datetime
 
 BINANCE_BASE_URL = "https://api.binance.com"
 
@@ -57,6 +60,51 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
         "close": np.array(closes, dtype=float),
         "volume": np.array(volumes, dtype=float),
     }
+
+
+# =========================
+# Trade Logger
+# =========================
+
+def log_trade(data: Dict[str, Any]):
+    """
+    يسجل الصفقات الحقيقية في ملف CSV اسمه trades_log.csv
+    """
+    log_file = "trades_log.csv"
+
+    file_exists = os.path.isfile(log_file)
+
+    with open(log_file, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        # لو أول مرة ننشئ الملف، نكتب الهيدر
+        if not file_exists:
+            writer.writerow([
+                "datetime", "symbol", "action", "price",
+                "tp", "sl", "rr",
+                "grade", "score", "confidence",
+                "pump_risk", "market_regime", "liquidity_bias",
+                "no_trade"
+            ])
+
+        decision = data.get("decision", {})
+
+        writer.writerow([
+            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            data.get("symbol"),
+            decision.get("action"),
+            data.get("last_price"),
+            data.get("tp"),
+            data.get("sl"),
+            data.get("rr"),
+            decision.get("grade"),
+            decision.get("score"),
+            decision.get("confidence"),
+            decision.get("pump_dump_risk"),
+            decision.get("market_regime"),
+            decision.get("liquidity_bias"),
+            decision.get("no_trade"),
+        ])
 
 
 # =========================
@@ -553,7 +601,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     return info
 
 
-
 # =========================
 # دمج الفريمات واتخاذ القرار
 # =========================
@@ -774,7 +821,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "grade": grade,
         "no_trade": no_trade,
     }
-
 
 
 # =========================
@@ -1010,7 +1056,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     explanation = " | ".join(reason_lines)
 
-    return {
+    result: Dict[str, Any] = {
         "symbol": symbol_norm,
         "last_price": last_close,
         "timeframes": tf_results,
@@ -1022,3 +1068,16 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
     }
+
+    # تسجيل الصفقات الفعلية فقط
+    if (
+        combined.get("action") in ("BUY", "SELL")
+        and combined.get("no_trade") is False
+        and last_close is not None
+    ):
+        try:
+            log_trade(result)
+        except Exception as e:
+            print("log_trade error:", e)
+
+    return result

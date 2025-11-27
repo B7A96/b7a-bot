@@ -1,108 +1,117 @@
-from typing import Dict, Any, List
 import csv
 import os
-from statistics import mean
+from collections import Counter, defaultdict
+from typing import Dict, Any, List
 
 
-LOG_PATH = "trades_log.csv"
+LOG_FILE = "trades_log.csv"
 
 
-def _load_trades() -> List[Dict[str, Any]]:
+def _read_trades() -> List[Dict[str, Any]]:
     """
-    يقرأ ملف trades_log.csv ويعيده كقائمة من الدكت.
-    لو الملف مو موجود أو فاضي يرجع قائمة فاضية.
+    يقرأ كل الصفقات من ملف اللوق ويرجعها كـ list of dicts
     """
-    if not os.path.isfile(LOG_PATH):
+    if not os.path.isfile(LOG_FILE):
         return []
 
     rows: List[Dict[str, Any]] = []
-    with open(LOG_PATH, "r", encoding="utf-8") as f:
+    with open(LOG_FILE, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            # نحاول نحول الأرقام
-            try:
-                row["price"] = float(row.get("price") or 0)
-                row["tp"] = float(row.get("tp") or 0)
-                row["sl"] = float(row.get("sl") or 0)
-                row["rr"] = float(row.get("rr") or 0)
-                row["score"] = float(row.get("score") or 0)
-            except Exception:
-                pass
-            rows.append(row)
+        for r in reader:
+            rows.append(r)
     return rows
 
 
 def get_trades_summary() -> str:
-    """
-    يرجع نص جاهز للإرسال في تيليجرام فيه ملخص أداء الإشارات.
-    """
-    trades = _load_trades()
+    trades = _read_trades()
     if not trades:
         return "📊 ما في بيانات في اللوق حالياً.\nجرّب تستخدم /signal كم مرة وبعدين استخدم /stats."
 
     total = len(trades)
 
-    buy = sum(1 for t in trades if (t.get("action") or "").upper() == "BUY")
-    sell = sum(1 for t in trades if (t.get("action") or "").upper() == "SELL")
-    wait = sum(1 for t in trades if (t.get("action") or "").upper() == "WAIT")
+    # عدّ الأكشنات والـ Grades
+    actions = Counter(t["action"] for t in trades if t.get("action"))
+    grades = Counter(t.get("grade", "C") for t in trades)
+    regimes = Counter(t.get("market_regime", "UNKNOWN") for t in trades)
+    liq_biases = Counter(t.get("liquidity_bias", "FLAT") for t in trades)
 
-    grades: Dict[str, int] = {}
-    for t in trades:
-        g = (t.get("grade") or "NA").upper()
-        grades[g] = grades.get(g, 0) + 1
+    # توزيع العملات
+    symbols = Counter(t["symbol"] for t in trades if t.get("symbol"))
 
-    # درجات السكور
-    scores = [float(t.get("score") or 0) for t in trades]
-    avg_score = mean(scores) if scores else 0.0
-    high_conf = sum(1 for t in trades if (t.get("confidence") or "").upper() == "HIGH")
-    med_conf = sum(1 for t in trades if (t.get("confidence") or "").upper() == "MEDIUM")
-    low_conf = sum(1 for t in trades if (t.get("confidence") or "").upper() == "LOW")
+    # متوسطات رقمية
+    def _safe_float(x: Any, default: float = 0.0) -> float:
+        try:
+            return float(x)
+        except Exception:
+            return default
 
-    # أنظمة السوق
-    trending = sum(1 for t in trades if (t.get("market_regime") or "").upper() == "TRENDING")
-    ranging = sum(1 for t in trades if (t.get("market_regime") or "").upper() == "RANGING")
-    mixed = sum(1 for t in trades if (t.get("market_regime") or "").upper() == "MIXED")
+    avg_score = sum(_safe_float(t.get("score")) for t in trades) / total
 
-    # صفقات No-Trade
-    no_trade = 0
-    for t in trades:
-        val = str(t.get("no_trade", "")).strip().lower()
-        if val in ("1", "true", "yes"):
-            no_trade += 1
+    rr_values = [_safe_float(t.get("rr")) for t in trades if t.get("rr")]
+    avg_rr = sum(rr_values) / len(rr_values) if rr_values else 0.0
 
-    with_trade = total - no_trade
+    risk_vals = [_safe_float(t.get("risk_pct")) for t in trades if t.get("risk_pct")]
+    reward_vals = [_safe_float(t.get("reward_pct")) for t in trades if t.get("reward_pct")]
+
+    avg_risk = sum(risk_vals) / len(risk_vals) if risk_vals else 0.0
+    avg_reward = sum(reward_vals) / len(reward_vals) if reward_vals else 0.0
+
+    # أفضل 5 عملات من حيث عدد الإشارات
+    top_symbols = symbols.most_common(5)
 
     # بناء النص
     lines: List[str] = []
-    lines.append("📊 B7A Ultra Analytics – ملخص أداء الإشارات")
+
+    lines.append("📊 <b>B7A Ultra Analytics – ملخص أداء الإشارات</b>")
+    lines.append("━━━━━━━━━━━━━━━━━━")
+
+    # نظرة عامة
+    lines.append("📌 <b>نظرة عامة:</b>")
+    lines.append(f"• إجمالي الصفقات المسجّلة: <b>{total}</b>")
+    lines.append(
+        f"• BUY: <b>{actions.get('BUY', 0)}</b> | SELL: <b>{actions.get('SELL', 0)}</b>"
+    )
+    lines.append(f"• متوسط قوة الإشارة (Score): <b>{avg_score:.1f}/100</b>")
+    if avg_rr > 0:
+        lines.append(f"• متوسط نسبة R:R المسجّلة: <b>{avg_rr:.2f}</b>")
+    if avg_risk > 0 and avg_reward > 0:
+        lines.append(
+            f"• متوسط المخاطرة: <b>{avg_risk:.1f}%</b> | "
+            f"متوسط هدف الربح: <b>{avg_reward:.1f}%</b>"
+        )
+
+    # توزيع الـ Grades
     lines.append("")
-    lines.append(f"عدد الإشارات المسجّلة: {total}")
-    lines.append(f"• صفقات فعلية (ليست No-Trade): {with_trade}")
-    lines.append(f"• مناطق No-Trade Zone: {no_trade}")
+    lines.append("🏆 <b>توزيع Grades:</b>")
+    for g in ["A+", "A", "B", "C"]:
+        if grades.get(g, 0) > 0:
+            pct = grades[g] / total * 100
+            lines.append(f"• {g}: <b>{grades[g]}</b> ({pct:.1f}%)")
+
+    # وضع السوق العام
     lines.append("")
-    lines.append("توزيع نوع القرار:")
-    lines.append(f"• BUY: {buy}")
-    lines.append(f"• SELL: {sell}")
-    lines.append(f"• WAIT فقط: {wait}")
+    lines.append("🌍 <b>أكثر أوضاع السوق تكراراً (Market Regime):</b>")
+    for regime, cnt in regimes.most_common():
+        pct = cnt / total * 100
+        lines.append(f"• {regime}: <b>{cnt}</b> ({pct:.1f}%)")
+
+    # Bias السيولة
     lines.append("")
-    lines.append(f"متوسط Score الكلي: {avg_score:.1f}/100")
-    lines.append("توزيع الثقة:")
-    lines.append(f"• HIGH: {high_conf}")
-    lines.append(f"• MEDIUM: {med_conf}")
-    lines.append(f"• LOW: {low_conf}")
+    lines.append("💧 <b>انحياز السيولة (Liquidity Bias):</b>")
+    for bias, cnt in liq_biases.most_common():
+        pct = cnt / total * 100
+        lines.append(f"• {bias}: <b>{cnt}</b> ({pct:.1f}%)")
+
+    # العملات الأكثر ظهوراً
+    if top_symbols:
+        lines.append("")
+        lines.append("🪙 <b>أكثر العملات ظهوراً في الإشارات:</b>")
+        for sym, cnt in top_symbols:
+            pct = cnt / total * 100
+            lines.append(f"• {sym}: <b>{cnt}</b> إشارة ({pct:.1f}%)")
+
     lines.append("")
-    lines.append("توزيع Grade:")
-    for g, cnt in sorted(grades.items()):
-        lines.append(f"• {g}: {cnt}")
-    lines.append("")
-    lines.append("وضع السوق أثناء الإشارات:")
-    lines.append(f"• TRENDING: {trending}")
-    lines.append(f"• RANGING: {ranging}")
-    lines.append(f"• MIXED: {mixed}")
-    lines.append("")
-    lines.append("💡 ملاحظة:")
-    lines.append("هذا الملخص لا يحسب الربح/الخسارة الفعلي،")
-    lines.append("لكن يعطيك صورة عن جودة الفلتر وسلوك البوت.")
-    lines.append("لاحقاً نستخدم نفس اللوق لتطوير استراتيجيات أدق.")
+    lines.append("ℹ️ هذا التقرير يعتمد على بيانات ملف اللوق فقط (trades_log.csv).")
+    lines.append("🔁 كل ما تستخدم /signal أكثر، التقرير يصير أذكى وأقوى.")
 
     return "\n".join(lines)

@@ -693,12 +693,22 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
+    # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
+    last_close: Optional[float] = None
+
     # 1) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
+
+            # نخزن آخر سعر للفريمات المهمة
+            if name == "1h":
+                last_close = tf_info.get("close", last_close)
+            elif name == "15m" and last_close is None:
+                last_close = tf_info.get("close", last_close)
+
             time.sleep(0.1)
         except Exception as e:
             tf_results[name] = {
@@ -712,13 +722,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
-    # 3) نحدد السعر المرجعي (آخر إغلاق من 1h أو 15m)
-    last_close_arr = tf_results.get("1h", tf_results.get("15m", {})).get("close")
-    if isinstance(last_close_arr, np.ndarray) and last_close_arr.size > 0:
-        last_close: Optional[float] = float(last_close_arr[-1])
-    else:
-        last_close = None
-
     tp: Optional[float] = None
     sl: Optional[float] = None
     rr: Optional[float] = None
@@ -726,7 +729,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     reward_pct: Optional[float] = None
 
     if last_close is not None:
-        price = last_close
+        price = float(last_close)
 
         # نسب المخاطرة حسب الثقة
         if combined["confidence"] == "HIGH":

@@ -566,7 +566,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "1d": 0.2,
     }
 
-    score = 0.0
+    score_sum = 0.0
     total_weight = 0.0
     bullish_votes = 0.0
     bearish_votes = 0.0
@@ -576,35 +576,78 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     liq_above_total = 0.0
     liq_below_total = 0.0
 
+    trending_weight = 0.0
+    ranging_weight = 0.0
+    breakout_up_weight = 0.0
+    breakout_down_weight = 0.0
+    bull_div_weight = 0.0
+    bear_div_weight = 0.0
+
     for tf, data in tf_data.items():
         w = weights.get(tf, 0.0)
+        if w <= 0:
+            continue
+
         tf_score = data.get("trend_score", 50)
-        score += tf_score * w
+        score_sum += tf_score * w
         total_weight += w
 
-        if data.get("trend") == "BULLISH":
+        tf_trend = data.get("trend")
+        if tf_trend == "BULLISH":
             bullish_votes += w
-        elif data.get("trend") == "BEARISH":
+        elif tf_trend == "BEARISH":
             bearish_votes += w
 
+        # pump/dump
         risk = data.get("pump_dump_risk", "LOW")
         if risk == "HIGH":
             max_pump_risk = "HIGH"
         elif risk == "MEDIUM" and max_pump_risk != "HIGH":
             max_pump_risk = "MEDIUM"
 
+        # السيولة
         liq_above_total += data.get("liq_above", 0.0) * w
         liq_below_total += data.get("liq_below", 0.0) * w
 
-    if total_weight > 0:
-        score /= total_weight
+        # وضع السوق (ترند / رينج)
+        regime = data.get("market_regime")
+        if regime == "TRENDING":
+            trending_weight += w
+        elif regime == "RANGING":
+            ranging_weight += w
 
+        # اختراقات
+        if data.get("is_breakout_up"):
+            breakout_up_weight += w
+        if data.get("is_breakout_down"):
+            breakout_down_weight += w
+
+        # دايفرجنس
+        if data.get("has_bull_div"):
+            bull_div_weight += w
+        if data.get("has_bear_div"):
+            bear_div_weight += w
+
+    if total_weight > 0:
+        base_score = score_sum / total_weight
+    else:
+        base_score = 50.0
+
+    # ترند عام
     if bullish_votes > bearish_votes:
         global_trend = "BULLISH"
     elif bearish_votes > bullish_votes:
         global_trend = "BEARISH"
     else:
         global_trend = "RANGING"
+
+    # وضع السوق العام
+    if trending_weight > ranging_weight * 1.1:
+        global_regime = "TRENDING"
+    elif ranging_weight > trending_weight * 1.1:
+        global_regime = "RANGING"
+    else:
+        global_regime = "MIXED"
 
     # تجميع انحياز السيولة الكلي
     if liq_above_total + liq_below_total > 0:
@@ -621,6 +664,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         liquidity_bias = "FLAT"
         liquidity_score = 0.0
 
+    # RSI العام (1h + 4h)
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
 
@@ -631,21 +675,64 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         r is not None and not np.isnan(r) and r < 30 for r in [rsi_1h, rsi_4h]
     )
 
+    # =========================
+    # تعديل السكور بالذكاء الجديد
+    # =========================
+    combined_score = base_score
+
+    # مكافأة السوق الترندي
+    if global_regime == "TRENDING":
+        combined_score += 3
+
+    # مكافأة/عقاب الاختراقات
+    if global_trend == "BULLISH":
+        if breakout_up_weight > 0.15:
+            combined_score += 4
+        if breakout_down_weight > 0.15:
+            combined_score -= 4
+    elif global_trend == "BEARISH":
+        if breakout_down_weight > 0.15:
+            combined_score += 4
+        if breakout_up_weight > 0.15:
+            combined_score -= 4
+
+    # دايفرجنس ضد الترند
+    if global_trend == "BULLISH" and bear_div_weight > 0.15:
+        combined_score -= 5
+    if global_trend == "BEARISH" and bull_div_weight > 0.15:
+        combined_score += 5
+
+    # السيولة
+    if liquidity_bias == "UP" and global_trend == "BULLISH":
+        combined_score += 3
+    elif liquidity_bias == "DOWN" and global_trend == "BULLISH":
+        combined_score -= 3
+    elif liquidity_bias == "DOWN" and global_trend == "BEARISH":
+        combined_score += 3
+    elif liquidity_bias == "UP" and global_trend == "BEARISH":
+        combined_score -= 3
+
+    combined_score = max(0.0, min(100.0, combined_score))
+
+    # =========================
+    # اتخاذ قرار BUY / SELL / WAIT
+    # =========================
     action = "WAIT"
 
-    if score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
+    if combined_score >= 70 and bullish_votes > bearish_votes and not overbought and max_pump_risk != "HIGH":
         action = "BUY"
-    elif score <= 30 and bearish_votes > bearish_votes and not oversold:
+    elif combined_score <= 30 and bearish_votes > bullish_votes and not oversold:
         action = "SELL"
 
-    # في المنطقة الرمادية نستخدم انحياز السيولة
-    if action == "WAIT" and 60 <= score < 70 and max_pump_risk != "HIGH":
+    # المنطقة الرمادية → نحتكم للسيولة
+    if action == "WAIT" and 60 <= combined_score < 70 and max_pump_risk != "HIGH":
         if liquidity_bias == "UP" and bullish_votes >= bearish_votes:
             action = "BUY"
         elif liquidity_bias == "DOWN" and bearish_votes >= bullish_votes:
             action = "SELL"
 
-    distance = abs(score - 50)
+    # الثقة
+    distance = abs(combined_score - 50.0)
     if distance > 25:
         confidence = "HIGH"
     elif distance > 15:
@@ -653,18 +740,41 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         confidence = "LOW"
 
+    # حماية من Pump/Dump
     if max_pump_risk == "HIGH" and action == "BUY":
         action = "WAIT"
 
+    # =========================
+    # Grade + No-Trade
+    # =========================
+    if combined_score >= 75 and confidence == "HIGH" and max_pump_risk == "LOW":
+        grade = "A+"
+    elif combined_score >= 65 and max_pump_risk != "HIGH":
+        grade = "A"
+    elif combined_score >= 55:
+        grade = "B"
+    else:
+        grade = "C"
+
+    no_trade = False
+    if grade in ("C",) or confidence == "LOW" or max_pump_risk == "HIGH":
+        no_trade = True
+    if action == "WAIT":
+        no_trade = True
+
     return {
-        "score": round(float(score), 2),
+        "score": round(float(combined_score), 2),
         "trend": global_trend,
         "action": action,
         "confidence": confidence,
         "pump_dump_risk": max_pump_risk,
         "liquidity_bias": liquidity_bias,
         "liquidity_score": round(float(liquidity_score), 2),
+        "market_regime": global_regime,
+        "grade": grade,
+        "no_trade": no_trade,
     }
+
 
 
 # =========================

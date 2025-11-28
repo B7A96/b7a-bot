@@ -889,7 +889,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-
 # =========================
 # اختيار نسب المخاطرة / الربح (اختياري)
 # =========================
@@ -1007,7 +1006,7 @@ def compute_trade_levels(
 
 
 # =========================
-# نقطة الدخول الرئيسية
+# نقطة الدخول الرئيسية + BTC Macro Filter
 # =========================
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
@@ -1020,7 +1019,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) نجيب بيانات كل الفريمات
+    # 1) نجيب بيانات كل الفريمات للرمز المطلوب
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
@@ -1043,8 +1042,47 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 2) ندمج الفريمات في قرار واحد
+    # 2) ندمج الفريمات في قرار واحد للرمز
     combined = combine_timeframes(tf_results)
+
+    # 2.5) BTC Macro Filter – فلتر اتجاه السوق العام
+    btc_context: Optional[Dict[str, Any]] = None
+    try:
+        btc_tf: Dict[str, Dict[str, Any]] = {}
+        for name, interval in TIMEFRAMES.items():
+            ohlcv_btc = fetch_klines("BTCUSDT", interval)
+            btc_tf[name] = analyse_timeframe(ohlcv_btc, name)
+            time.sleep(0.05)
+
+        btc_context = combine_timeframes(btc_tf)
+
+        # لو العملة ليست BTC نفسها نطبق الفلتر الماكرو
+        if symbol_norm != "BTCUSDT":
+            btc_trend = btc_context.get("trend", "RANGING")
+            btc_grade = btc_context.get("grade", "C")
+
+            # لو BTC تعبانة (Grade C) نوقف أي صفقة
+            if btc_grade == "C" and combined.get("action") in ("BUY", "SELL"):
+                combined["no_trade"] = True
+                combined["grade"] = "C"
+                combined["action"] = "WAIT"
+
+            # لو BTC ترند هابط قوي لا نسمح بـ BUY
+            if btc_trend == "BEARISH" and combined.get("action") == "BUY":
+                combined["no_trade"] = True
+                combined["grade"] = "C"
+                combined["action"] = "WAIT"
+
+            # لو BTC ترند صاعد قوي لا نسمح بـ SELL
+            if btc_trend == "BULLISH" and combined.get("action") == "SELL":
+                combined["no_trade"] = True
+                combined["grade"] = "C"
+                combined["action"] = "WAIT"
+
+    except Exception as e:
+        # لو صار خطأ في BTC ما نوقف البوت، نكمل بدون الفلتر
+        btc_context = None
+        print("BTC macro filter error:", e)
 
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -1074,7 +1112,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         reward_pct = risk_pct * reward_mult
         action = combined["action"]
 
-        if action in ("BUY", "SELL"):
+        if action in ("BUY", "SELL") and not combined.get("no_trade", False):
             sl, tp, rr = compute_trade_levels(
                 symbol_norm=symbol_norm,
                 price=price,
@@ -1092,11 +1130,11 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     if grade:
         reason_lines.append(f"تصنيف الإشارة (Grade): {grade}")
-    reason_lines.append(f"وضع السوق العام: {market_regime}")
+    reason_lines.append(f"وضع السوق العام للرمز: {market_regime}")
     if no_trade:
         reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
 
-    reason_lines.append(f"الاتجاه العام: {combined['trend']}")
+    reason_lines.append(f"الاتجاه العام للرمز: {combined['trend']}")
     reason_lines.append(
         "أقوى الفريمات: "
         + ", ".join(
@@ -1114,6 +1152,13 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     elif liq_bias == "DOWN":
         reason_lines.append(
             f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
+        )
+
+    # ملخص اتجاه BTC الماكرو لو متوفر
+    if btc_context is not None:
+        reason_lines.append(
+            f"BTC Macro: Trend={btc_context.get('trend')} | "
+            f"Grade={btc_context.get('grade')} | Score={btc_context.get('score')}"
         )
 
     if combined["pump_dump_risk"] != "LOW":
@@ -1134,6 +1179,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr": rr,
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
+        "btc_macro": btc_context,
     }
 
     # تسجيل الصفقات الفعلية فقط

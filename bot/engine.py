@@ -537,6 +537,36 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         bearish_points += 1
 
     # =========================
+    # Whale / Smart Money Detector
+    # =========================
+    whale_score = 0.0
+
+    # جزء 1: انهيارات وفوليوم غريب
+    if vol_surge:
+        whale_score += 15
+
+    # جزء 2: شموع سريعة جداً (Volatility)
+    if abs(change_1) > 1.8:
+        whale_score += 10
+    if abs(change_1) > 3.5:
+        whale_score += 15
+
+    # جزء 3: ATR مرتفع = في تلاعب أو تجميع
+    if not np.isnan(atr_last):
+        if atr_last > (0.004 * last_close):  # ATR > 0.4% من السعر
+            whale_score += 10
+        if atr_last > (0.007 * last_close):  # ATR > 0.7%
+            whale_score += 15
+
+    # جزء 4: شموع بها Wicks قوية (جمع سيولة)
+    if abs(high[-1] - close[-1]) > (0.004 * last_close):
+        whale_score += 5
+    if abs(close[-1] - low[-1]) > (0.004 * last_close):
+        whale_score += 5
+
+    whale_score = min(100.0, whale_score)
+
+    # =========================
     # Trend Score + Pump/Dump
     # =========================
     trend_score = (bullish_points - bearish_points) * 10 + 50
@@ -588,6 +618,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "is_breakout_down": is_breakout_down,
             "has_bull_div": has_bull_div,
             "has_bear_div": has_bear_div,
+            "whale_score": whale_score,
         }
     )
 
@@ -597,6 +628,38 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         info["trend"] = "BEARISH"
     else:
         info["trend"] = "RANGING"
+
+    # =========================
+    # Pre-Pump / Pre-Dump Detector
+    # =========================
+    pre_pump = False
+    pre_dump = False
+
+    # شروط قبل الانفجار:
+    # - فوليوم أعلى من الطبيعي
+    # - RSI يرتفع من مناطق منخفضة
+    # - شمعة خضراء قوية + ATR عالي
+    if (
+        vol_surge
+        and change_1 > 0.8
+        and rsi_last > 35
+        and not np.isnan(atr_last)
+        and atr_last > (0.003 * last_close)
+    ):
+        pre_pump = True
+
+    # شروط قبل الانهيار:
+    if (
+        vol_surge
+        and change_1 < -0.8
+        and rsi_last < 65
+        and not np.isnan(atr_last)
+        and atr_last > (0.003 * last_close)
+    ):
+        pre_dump = True
+
+    info["pre_pump"] = pre_pump
+    info["pre_dump"] = pre_dump
 
     return info
 
@@ -635,6 +698,10 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     breakout_down_weight = 0.0
     bull_div_weight = 0.0
     bear_div_weight = 0.0
+
+    whale_sum = 0.0
+    pump_flags = 0.0
+    dump_flags = 0.0
 
     for tf, data in tf_data.items():
         w = weights.get(tf, 0.0)
@@ -680,6 +747,11 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
             bull_div_weight += w
         if data.get("has_bear_div"):
             bear_div_weight += w
+
+        # Whale & Pre Pump Weighted Aggregation
+        whale_sum += data.get("whale_score", 0.0) * w
+        pump_flags += (1 if data.get("pre_pump") else 0) * w
+        dump_flags += (1 if data.get("pre_dump") else 0) * w
 
     if total_weight > 0:
         base_score = score_sum / total_weight
@@ -791,6 +863,18 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     )
 
     # =========================
+    # Whale Intelligence Merge
+    # =========================
+    if total_weight > 0:
+        whale_score_final = whale_sum / total_weight
+        pre_pump_score = pump_flags / total_weight
+        pre_dump_score = dump_flags / total_weight
+    else:
+        whale_score_final = 0.0
+        pre_pump_score = 0.0
+        pre_dump_score = 0.0
+
+    # =========================
     # اتخاذ قرار BUY / SELL / WAIT
     # =========================
     action = "WAIT"
@@ -883,9 +967,12 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "market_regime": global_regime,
         "grade": grade,
         "no_trade": no_trade,
-        # معلومات إضافية مفيدة لو حبينا نعرضها لاحقاً
+        # معلومات إضافية مفيدة
         "bull_align": round(float(bull_align), 2),
         "bear_align": round(float(bear_align), 2),
+        "whale_score": round(float(whale_score_final), 2),
+        "pre_pump_score": round(float(pre_pump_score), 2),
+        "pre_dump_score": round(float(pre_dump_score), 2),
     }
 
 
@@ -1006,7 +1093,7 @@ def compute_trade_levels(
 
 
 # =========================
-# نقطة الدخول الرئيسية + BTC Macro Filter
+# نقطة الدخول الرئيسية
 # =========================
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
@@ -1019,7 +1106,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) نجيب بيانات كل الفريمات للرمز المطلوب
+    # 1) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
@@ -1042,47 +1129,21 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 2) ندمج الفريمات في قرار واحد للرمز
+    # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
-    # 2.5) BTC Macro Filter – فلتر اتجاه السوق العام
-    btc_context: Optional[Dict[str, Any]] = None
-    try:
-        btc_tf: Dict[str, Dict[str, Any]] = {}
-        for name, interval in TIMEFRAMES.items():
-            ohlcv_btc = fetch_klines("BTCUSDT", interval)
-            btc_tf[name] = analyse_timeframe(ohlcv_btc, name)
-            time.sleep(0.05)
+    # منطق خاص بالإشارات قبل الانفجار + الحيتان
+    pre_pump_flag = combined.get("pre_pump_score", 0.0) >= 0.25
+    whale_alert = combined.get("whale_score", 0.0) >= 40.0
 
-        btc_context = combine_timeframes(btc_tf)
-
-        # لو العملة ليست BTC نفسها نطبق الفلتر الماكرو
-        if symbol_norm != "BTCUSDT":
-            btc_trend = btc_context.get("trend", "RANGING")
-            btc_grade = btc_context.get("grade", "C")
-
-            # لو BTC تعبانة (Grade C) نوقف أي صفقة
-            if btc_grade == "C" and combined.get("action") in ("BUY", "SELL"):
-                combined["no_trade"] = True
-                combined["grade"] = "C"
-                combined["action"] = "WAIT"
-
-            # لو BTC ترند هابط قوي لا نسمح بـ BUY
-            if btc_trend == "BEARISH" and combined.get("action") == "BUY":
-                combined["no_trade"] = True
-                combined["grade"] = "C"
-                combined["action"] = "WAIT"
-
-            # لو BTC ترند صاعد قوي لا نسمح بـ SELL
-            if btc_trend == "BULLISH" and combined.get("action") == "SELL":
-                combined["no_trade"] = True
-                combined["grade"] = "C"
-                combined["action"] = "WAIT"
-
-    except Exception as e:
-        # لو صار خطأ في BTC ما نوقف البوت، نكمل بدون الفلتر
-        btc_context = None
-        print("BTC macro filter error:", e)
+    # لو عندنا Pre-Pump وقرار BUY ومش No-Trade → نرفع Grade إلى A+
+    if (
+        pre_pump_flag
+        and combined.get("action") == "BUY"
+        and combined.get("no_trade") is False
+        and combined.get("grade") in ("A", "B")
+    ):
+        combined["grade"] = "A+"
 
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -1112,7 +1173,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         reward_pct = risk_pct * reward_mult
         action = combined["action"]
 
-        if action in ("BUY", "SELL") and not combined.get("no_trade", False):
+        if action in ("BUY", "SELL"):
             sl, tp, rr = compute_trade_levels(
                 symbol_norm=symbol_norm,
                 price=price,
@@ -1130,11 +1191,17 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     if grade:
         reason_lines.append(f"تصنيف الإشارة (Grade): {grade}")
-    reason_lines.append(f"وضع السوق العام للرمز: {market_regime}")
+    reason_lines.append(f"وضع السوق العام: {market_regime}")
     if no_trade:
         reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
 
-    reason_lines.append(f"الاتجاه العام للرمز: {combined['trend']}")
+    if whale_alert:
+        reason_lines.append("🐋 تنبيه: حركة سيولة قوية (Whale Activity Detected).")
+
+    if pre_pump_flag and not no_trade:
+        reason_lines.append("🚀 إشارة ما قبل الانفجار (Pre-Pump Pattern) مرصودة على الفريمات.")
+
+    reason_lines.append(f"الاتجاه العام: {combined['trend']}")
     reason_lines.append(
         "أقوى الفريمات: "
         + ", ".join(
@@ -1152,13 +1219,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     elif liq_bias == "DOWN":
         reason_lines.append(
             f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
-        )
-
-    # ملخص اتجاه BTC الماكرو لو متوفر
-    if btc_context is not None:
-        reason_lines.append(
-            f"BTC Macro: Trend={btc_context.get('trend')} | "
-            f"Grade={btc_context.get('grade')} | Score={btc_context.get('score')}"
         )
 
     if combined["pump_dump_risk"] != "LOW":
@@ -1179,7 +1239,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr": rr,
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
-        "btc_macro": btc_context,
+        "pre_pump": pre_pump_flag,
+        "whale_alert": whale_alert,
     }
 
     # تسجيل الصفقات الفعلية فقط

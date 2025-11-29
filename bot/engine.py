@@ -7,8 +7,13 @@ import csv
 import os
 from datetime import datetime
 
+# =========================
+# إعدادات عامة
+# =========================
+
 BINANCE_BASE_URL = "https://api.binance.com"
 
+# الفريمات اللي نستخدمها
 TIMEFRAMES = {
     "15m": "15m",
     "1h": "1h",
@@ -18,6 +23,7 @@ TIMEFRAMES = {
 
 
 class MarketDataError(Exception):
+    """Raised when we cannot fetch data from Binance."""
     pass
 
 
@@ -27,6 +33,10 @@ def _normalize_symbol(symbol: str) -> str:
         symbol = symbol + "USDT"
     return symbol
 
+
+# =========================
+# جلب البيانات من Binance
+# =========================
 
 def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.ndarray]:
     symbol = _normalize_symbol(symbol)
@@ -63,6 +73,9 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
 # =========================
 
 def log_trade(data: Dict[str, Any]):
+    """
+    يسجل الصفقات الفعلية في ملف CSV اسمه trades_log.csv
+    """
     log_file = "trades_log.csv"
     file_exists = os.path.isfile(log_file)
 
@@ -192,6 +205,9 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
 
 def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
         period: int = 14) -> np.ndarray:
+    """
+    Average True Range لقياس تذبذب السعر.
+    """
     if len(close) < period + 1:
         raise ValueError("Not enough data for ATR")
 
@@ -218,6 +234,9 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 
 def _detect_swings(high: np.ndarray, low: np.ndarray,
                    left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
+    """
+    يحدد swing highs و swing lows بسيطة.
+    """
     n = len(high)
     swing_highs: List[int] = []
     swing_lows: List[int] = []
@@ -232,6 +251,9 @@ def _detect_swings(high: np.ndarray, low: np.ndarray,
 
 
 def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[str, Any]]:
+    """
+    يجمع القمم / القيعان المتقاربة في مستوى واحد (zone).
+    """
     if not prices:
         return []
     prices_sorted = sorted(prices)
@@ -251,6 +273,9 @@ def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[
 
 
 def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
+    """
+    يبني خريطة سيولة بسيطة من القمم والقيعان.
+    """
     high = ohlcv["high"]
     low = ohlcv["low"]
     close = ohlcv["close"]
@@ -269,6 +294,7 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
     above_strength = 0.0
     below_strength = 0.0
 
+    # مستويات فوق السعر (Buy-side liquidity)
     for lvl in high_levels:
         price = float(lvl["price"])
         count = int(lvl["count"])
@@ -296,6 +322,7 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
             }
         )
 
+    # مستويات تحت السعر (Sell-side liquidity)
     for lvl in low_levels:
         price = float(lvl["price"])
         count = int(lvl["count"])
@@ -349,93 +376,6 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         "last_price": last_close,
     }
 
-# =========================
-# Smart Money Lite Engine
-# =========================
-
-def detect_sweeps(high, low, close):
-    sweep_up = False
-    sweep_down = False
-
-    # Sweep Down → شمعة نزلت تحت آخر قاع ثم رجعت أغلقت فوقه
-    if close[-1] > low[-2] and low[-1] < low[-2]:
-        sweep_down = True
-
-    # Sweep Up → شمعة صعدت فوق آخر قمة ثم رجعت أغلقت تحتها
-    if close[-1] < high[-2] and high[-1] > high[-2]:
-        sweep_up = True
-
-    return sweep_up, sweep_down
-
-
-def detect_market_structure(high, low, close):
-    # CHoCH / MSS بسيط
-    structure = "RANGING"
-    bullish = close[-1] > high[-2]
-    bearish = close[-1] < low[-2]
-
-    if bullish:
-        structure = "BULLISH_BREAK"
-    elif bearish:
-        structure = "BEARISH_BREAK"
-
-    return structure
-
-
-def htf_trend_filter(htf_close, htf_ema):
-    if htf_close > htf_ema:
-        return "BULLISH"
-    elif htf_close < htf_ema:
-        return "BEARISH"
-    return "RANGING"
-
-def detect_sweeps(high: np.ndarray, low: np.ndarray, close: np.ndarray, lookback: int = 20) -> Tuple[bool, bool]:
-    """
-    يكتشف Liquidity Sweeps بسيطة:
-    - sweep_up  : كسر آخر قمة ثم إغلاق داخلها (جمع سيولة الشورت)
-    - sweep_down: كسر آخر قاع ثم إغلاق فوقه (جمع سيولة اللونغ)
-    """
-    if len(close) < lookback + 5:
-        return False, False
-
-    # أعلى / أدنى سعر قبل آخر شمعة (من غير شمعة اليوم)
-    recent_high = float(np.max(high[-lookback - 1: -1]))
-    recent_low  = float(np.min(low[-lookback - 1: -1]))
-
-    last_high = float(high[-1])
-    last_low  = float(low[-1])
-    last_close = float(close[-1])
-
-    sweep_down = last_low < recent_low and last_close > recent_low
-    sweep_up   = last_high > recent_high and last_close < recent_high
-
-    return sweep_up, sweep_down
-
-
-def detect_market_structure(high: np.ndarray, low: np.ndarray, lookback: int = 50) -> str:
-    """
-    يكشف كسر هيكل بسيط:
-    - BULLISH_BREAK  = كسر High مهم (HH)
-    - BEARISH_BREAK  = كسر Low مهم (LL)
-    - RANGE / NONE   = مافيه كسر واضح
-    """
-    if len(high) < lookback + 5:
-        return "NONE"
-
-    prev_hh = float(np.max(high[-lookback - 1: -1]))
-    prev_ll = float(np.min(low[-lookback - 1: -1]))
-
-    last_high = float(high[-1])
-    last_low  = float(low[-1])
-
-    broke_up   = last_high > prev_hh * 1.001   # كسر بقليل فوق
-    broke_down = last_low  < prev_ll * 0.999   # كسر بقليل تحت
-
-    if broke_up and not broke_down:
-        return "BULLISH_BREAK"
-    if broke_down and not broke_up:
-        return "BEARISH_BREAK"
-    return "RANGE"
 
 # =========================
 # تحليل كل فريم
@@ -443,8 +383,8 @@ def detect_market_structure(high: np.ndarray, low: np.ndarray, lookback: int = 5
 
 def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
     close = ohlcv["close"]
-    high  = ohlcv["high"]
-    low   = ohlcv["low"]
+    high = ohlcv["high"]
+    low = ohlcv["low"]
     volume = ohlcv["volume"]
 
     info: Dict[str, Any] = {"timeframe": name}
@@ -486,21 +426,16 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     vwap_arr = vwap(high, low, close, volume)
     vwap_last = float(vwap_arr[-1])
 
-    # تغيّر السعر + انفجار الفوليوم
     vol_surge = volume_surge(volume)
-    change_1  = price_change(close, 1)
-    change_4  = price_change(close, 4)
-
-    # ✅ Smart Money Lite: sweeps + structure
-    sweep_up, sweep_down = detect_sweeps(high, low, close)
-    structure = detect_market_structure(high, low)
+    change_1 = price_change(close, 1)
+    change_4 = price_change(close, 4)
 
     bullish_points = 0
     bearish_points = 0
 
     last_close = float(close[-1])
 
-    # اتجاه السعر مقابل EMA200
+    # اتجاه بالنسبة للـ EMA200
     if not np.isnan(ema200):
         if last_close > ema200:
             bullish_points += 1
@@ -516,14 +451,14 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         elif rsi_last < 30:
             bullish_points += 1
 
-    # MACD cross
+    # MACD Cross
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
             bullish_points += 1
         else:
             bearish_points += 1
 
-    # لمس Bollinger Bands
+    # Bollinger Touch
     if not np.isnan(lower_last) and not np.isnan(upper_last):
         if last_close <= lower_last:
             bullish_points += 1
@@ -539,7 +474,9 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     except Exception:
         atr_last = float("nan")
 
-    distance_from_ema200 = abs(last_close - ema200) if not np.isnan(ema200) else 0.0
+    distance_from_ema200 = (
+        abs(last_close - ema200) if not np.isnan(ema200) else 0.0
+    )
 
     if (
         not np.isnan(ema200)
@@ -552,15 +489,15 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         market_regime = "RANGING"
 
     # =========================
-    # Breakouts
+    # Breakout Detector
     # =========================
     lookback = min(20, len(close))
     if lookback < 5:
         recent_high = last_close
-        recent_low  = last_close
+        recent_low = last_close
     else:
         recent_high = float(np.max(high[-lookback:]))
-        recent_low  = float(np.min(low[-lookback:]))
+        recent_low = float(np.min(low[-lookback:]))
 
     is_breakout_up = False
     is_breakout_down = False
@@ -572,48 +509,41 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         is_breakout_down = True
 
     # =========================
-    # RSI Divergence بسيطة
+    # RSI Divergence
     # =========================
     has_bull_div = False
     has_bear_div = False
 
     if rsi_arr is not None and len(close) >= 20:
+        # نستخدم نقطة قبل 10 شموع كنقطة مقارنة بسيطة
         prev_idx = -10
+
         prev_low = close[prev_idx]
         curr_low = close[-1]
         prev_rsi = rsi_arr[prev_idx]
         curr_rsi = rsi_arr[-1]
 
         if not np.isnan(prev_rsi) and not np.isnan(curr_rsi):
-            # Bullish: السعر ينزل و RSI يطلع
+            # Bullish Divergence: السعر ينزل، RSI يطلع
             if curr_low < prev_low and curr_rsi > prev_rsi:
                 has_bull_div = True
-            # Bearish: السعر يطلع و RSI ينزل
+
+            # Bearish Divergence: السعر يطلع، RSI ينزل
             if curr_low > prev_low and curr_rsi < prev_rsi:
                 has_bear_div = True
 
+    # نكافئ/نعاقب حسب الدايفرجنس
     if has_bull_div:
         bullish_points += 1
     if has_bear_div:
         bearish_points += 1
-
-    # ✅ تأثير sweeps على النقاط
-    if sweep_down:
-        bullish_points += 2
-    if sweep_up:
-        bearish_points += 2
-
-    # ✅ تأثير كسر الهيكل على النقاط
-    if structure == "BULLISH_BREAK":
-        bullish_points += 2
-    elif structure == "BEARISH_BREAK":
-        bearish_points += 2
 
     # =========================
     # Trend Score + Pump/Dump
     # =========================
     trend_score = (bullish_points - bearish_points) * 10 + 50
 
+    # تعديل بسيط للترند حسب وضع السوق والاختراق
     if market_regime == "TRENDING" and (is_breakout_up or is_breakout_down):
         trend_score += 5
     if market_regime == "RANGING" and (is_breakout_up or is_breakout_down):
@@ -628,8 +558,8 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         pump_dump_risk = "HIGH"
 
     # خريطة السيولة لهذا الفريم
-    liq_map   = build_liquidity_map(ohlcv, name)
-    liq_bias  = liq_map.get("bias", "FLAT")
+    liq_map = build_liquidity_map(ohlcv, name)
+    liq_bias = liq_map.get("bias", "FLAT")
     liq_score = liq_map.get("score", 0.0)
     liq_above = liq_map.get("above_strength", 0.0)
     liq_below = liq_map.get("below_strength", 0.0)
@@ -654,23 +584,18 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "liq_score": liq_score,
             "liq_above": liq_above,
             "liq_below": liq_below,
+            # إضافات الذكاء الجديد
             "market_regime": market_regime,
             "is_breakout_up": is_breakout_up,
             "is_breakout_down": is_breakout_down,
             "has_bull_div": has_bull_div,
             "has_bear_div": has_bear_div,
-            # 🔥 إضافات Smart Money Lite
-            "sweep_up": sweep_up,
-            "sweep_down": sweep_down,
-            "structure_break": structure,
         }
     )
 
-    # اتجاه نهائي للفريم
     if bullish_points > bearish_points:
         info["trend"] = "BULLISH"
     elif bearish_points > bullish_points:
-        info["trend"] = "BEARISH"
         info["trend"] = "BEARISH"
     else:
         info["trend"] = "RANGING"
@@ -678,12 +603,14 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     return info
 
 
-
 # =========================
-# دمج الفريمات واتخاذ القرار (Mode A)
+# دمج الفريمات واتخاذ القرار
 # =========================
 
 def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    دمج الفريمات في قرار واحد (Ultra Filter).
+    """
     weights = {
         "15m": 0.2,
         "1h": 0.3,
@@ -723,26 +650,31 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         elif tf_trend == "BEARISH":
             bearish_votes += w
 
+        # pump/dump
         risk = data.get("pump_dump_risk", "LOW")
         if risk == "HIGH":
             max_pump_risk = "HIGH"
         elif risk == "MEDIUM" and max_pump_risk != "HIGH":
             max_pump_risk = "MEDIUM"
 
+        # السيولة
         liq_above_total += data.get("liq_above", 0.0) * w
         liq_below_total += data.get("liq_below", 0.0) * w
 
+        # وضع السوق (ترند / رينج)
         regime = data.get("market_regime")
         if regime == "TRENDING":
             trending_weight += w
         elif regime == "RANGING":
             ranging_weight += w
 
+        # اختراقات
         if data.get("is_breakout_up"):
             breakout_up_weight += w
         if data.get("is_breakout_down"):
             breakout_down_weight += w
 
+        # دايفرجنس
         if data.get("has_bull_div"):
             bull_div_weight += w
         if data.get("has_bear_div"):
@@ -753,9 +685,11 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         base_score = 50.0
 
+    # نسب توافق الاتجاه بين الفريمات
     bull_align = bullish_votes / total_weight if total_weight > 0 else 0.0
     bear_align = bearish_votes / total_weight if total_weight > 0 else 0.0
 
+    # ترند عام
     if bullish_votes > bearish_votes:
         global_trend = "BULLISH"
     elif bearish_votes > bullish_votes:
@@ -763,6 +697,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         global_trend = "RANGING"
 
+    # وضع السوق العام
     if trending_weight > ranging_weight * 1.1:
         global_regime = "TRENDING"
     elif ranging_weight > trending_weight * 1.1:
@@ -770,6 +705,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         global_regime = "MIXED"
 
+    # تجميع انحياز السيولة الكلي
     if liq_above_total + liq_below_total > 0:
         liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
         if liq_imbalance > 0.2:
@@ -784,6 +720,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         liquidity_bias = "FLAT"
         liquidity_score = 0.0
 
+    # RSI العام (1h + 4h)
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
 
@@ -794,11 +731,16 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         r is not None and not np.isnan(r) and r < 30 for r in [rsi_1h, rsi_4h]
     )
 
+    # =========================
+    # تعديل السكور بالذكاء الجديد
+    # =========================
     combined_score = base_score
 
+    # مكافأة السوق الترندي
     if global_regime == "TRENDING":
         combined_score += 3
 
+    # مكافأة/عقاب الاختراقات
     if global_trend == "BULLISH":
         if breakout_up_weight > 0.15:
             combined_score += 4
@@ -810,11 +752,13 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         if breakout_up_weight > 0.15:
             combined_score -= 4
 
+    # دايفرجنس ضد الترند
     if global_trend == "BULLISH" and bear_div_weight > 0.15:
         combined_score -= 5
     if global_trend == "BEARISH" and bull_div_weight > 0.15:
         combined_score += 5
 
+    # السيولة
     if liquidity_bias == "UP" and global_trend == "BULLISH":
         combined_score += 3
     elif liquidity_bias == "DOWN" and global_trend == "BULLISH":
@@ -826,6 +770,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     combined_score = max(0.0, min(100.0, combined_score))
 
+    # فريم مرجعي قوي (Anchor)
     strong_bull_anchor = (
         tf_data.get("4h", {}).get("trend") == "BULLISH"
         and tf_data.get("4h", {}).get("trend_score", 50) >= 60
@@ -842,9 +787,12 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         and tf_data.get("1d", {}).get("trend_score", 50) >= 55
     )
 
+    # =========================
+    # اتخاذ قرار BUY / SELL / WAIT
+    # =========================
     action = "WAIT"
 
-    # Mode A – شروط مشددة
+    # شروط BUY
     if (
         combined_score >= 72
         and bull_align >= 0.6
@@ -854,6 +802,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "BUY"
 
+    # شروط SELL
     if (
         combined_score <= 28
         and bear_align >= 0.6
@@ -862,12 +811,14 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "SELL"
 
+    # المنطقة الرمادية → نحتكم للسيولة إذا في أفضلية واضحة
     if action == "WAIT" and 60 <= combined_score < 72 and max_pump_risk != "HIGH":
         if liquidity_bias == "UP" and bull_align >= 0.6 and strong_bull_anchor:
             action = "BUY"
         elif liquidity_bias == "DOWN" and bear_align >= 0.6 and strong_bear_anchor:
             action = "SELL"
 
+    # الثقة
     distance = abs(combined_score - 50.0)
     if distance > 25:
         confidence = "HIGH"
@@ -876,10 +827,13 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         confidence = "LOW"
 
+    # حماية من Pump/Dump
     if max_pump_risk == "HIGH" and action == "BUY":
         action = "WAIT"
 
-    # Grade
+    # =========================
+    # Grade + No-Trade
+    # =========================
     if (
         combined_score >= 80
         and confidence == "HIGH"
@@ -901,17 +855,15 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     no_trade = False
 
+    # شروط المنطقة المحظورة No-Trade
     if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
         no_trade = True
+
     if action == "WAIT":
         no_trade = True
-    if liquidity_score < 5:
-        no_trade = True
 
-    # Mode A – High Precision:
-    # ما ندخل إلا على A و A+ فقط
-    if grade not in ("A", "A+"):
-        action = "WAIT"
+    # لو السيولة تقريباً متعادلة تماماً → نعتبرها No-Trade
+    if liquidity_score < 5:
         no_trade = True
 
     return {
@@ -925,130 +877,143 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "market_regime": global_regime,
         "grade": grade,
         "no_trade": no_trade,
+        # معلومات إضافية
         "bull_align": round(float(bull_align), 2),
         "bear_align": round(float(bear_align), 2),
     }
 
 
 # =========================
-# اختيار نسب المخاطرة / الربح
+# Dynamic ATR Multi-TP
 # =========================
 
-def choose_risk_reward(decision: Dict[str, Any],
-                       tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
-    score = decision.get("score", 50)
-    confidence = decision.get("confidence", "LOW")
-    pump_risk = decision.get("pump_dump_risk", "LOW")
-    trend = decision.get("trend", "RANGING")
+def compute_trade_levels_multi(
+    decision: Dict[str, Any],
+    symbol_norm: str,
+    price: float,
+    risk_pct: float,
+) -> Dict[str, Optional[float]]:
+    """
+    يحسب SL + TP1/TP2/TP3 باستخدام ATR من فريم 1h (ولو فشل → 15m)
+    ويعدل المسافات حسب Grade + Score.
+    """
 
-    change_15 = abs(tf_results.get("15m", {}).get("change_1", 0.0) or 0.0)
-    change_1h = abs(tf_results.get("1h", {}).get("change_1", 0.0) or 0.0)
-    volatility = max(change_15, change_1h)
+    # نحاول ATR من 1h أولاً
+    anchor_tf = "1h"
+    interval = TIMEFRAMES.get(anchor_tf, "1h")
+    atr_value: Optional[float] = None
 
-    if volatility < 0.5:
-        vol_level = "LOW"
-    elif volatility < 1.5:
-        vol_level = "MEDIUM"
+    try:
+        ohlcv = fetch_klines(symbol_norm, interval, limit=200)
+        atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
+        atr_value = float(atr_vals[-1])
+    except Exception:
+        # نحاول 15m
+        try:
+            ohlcv = fetch_klines(symbol_norm, TIMEFRAMES["15m"], limit=200)
+            atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
+            atr_value = float(atr_vals[-1])
+        except Exception:
+            atr_value = None
+
+    if atr_value is None or atr_value <= 0:
+        return {
+            "sl": None,
+            "tp1": None,
+            "tp2": None,
+            "tp3": None,
+            "rr1": None,
+            "rr2": None,
+            "rr3": None,
+        }
+
+    action = decision.get("action")
+    grade = decision.get("grade", "C")
+    score = decision.get("score", 50.0)
+
+    # Multipliers حسب قوة الإشارة
+    base_sl_mult = 1.2
+
+    if grade == "A+":
+        tp_mults = (1.2, 2.0, 3.0)
+        base_sl_mult = 1.3
+    elif grade == "A":
+        tp_mults = (1.0, 1.8, 2.5)
+        base_sl_mult = 1.25
     else:
-        vol_level = "HIGH"
+        tp_mults = (0.8, 1.5, 2.0)
+        base_sl_mult = 1.1
 
-    risk_pct = 0.015
-    reward_pct = 0.03
+    # لو السكور تحت 70 نخفف الأهداف شوي
+    if score < 70:
+        tp_mults = tuple(m * 0.9 for m in tp_mults)
 
-    strong_trend = (score >= 75 and confidence == "HIGH" and trend in ("BULLISH", "BEARISH"))
-    medium_trend = (60 <= score < 75)
+    # مسافة SL = أكبر من ATR * multiplier أو نسبة من السعر
+    sl_dist_atr = atr_value * base_sl_mult
+    sl_dist_pct = price * (risk_pct / 100.0)
+    sl_dist = max(sl_dist_atr, sl_dist_pct)
 
-    if strong_trend and pump_risk == "LOW":
-        risk_pct = 0.02
-        reward_pct = 0.06
-    elif medium_trend and pump_risk != "HIGH":
-        risk_pct = 0.018
-        reward_pct = 0.04
-    else:
-        risk_pct = 0.015
-        reward_pct = 0.025
+    tp_dists = [atr_value * m for m in tp_mults]
 
-    if vol_level == "HIGH":
-        risk_pct *= 1.3
-        reward_pct *= 1.3
-    elif vol_level == "LOW":
-        risk_pct *= 0.8
-        reward_pct *= 0.8
+    if action not in ("BUY", "SELL"):
+        return {
+            "sl": None,
+            "tp1": None,
+            "tp2": None,
+            "tp3": None,
+            "rr1": None,
+            "rr2": None,
+            "rr3": None,
+        }
 
-    if pump_risk == "MEDIUM":
-        reward_pct *= 0.8
+    if action == "BUY":
+        sl = round(price - sl_dist, 4)
+        tp1 = round(price + tp_dists[0], 4)
+        tp2 = round(price + tp_dists[1], 4)
+        tp3 = round(price + tp_dists[2], 4)
+    else:  # SELL
+        sl = round(price + sl_dist, 4)
+        tp1 = round(price - tp_dists[0], 4)
+        tp2 = round(price - tp_dists[1], 4)
+        tp3 = round(price - tp_dists[2], 4)
+
+    rr1 = round(tp_dists[0] / sl_dist, 2) if sl_dist > 0 else None
+    rr2 = round(tp_dists[1] / sl_dist, 2) if sl_dist > 0 else None
+    rr3 = round(tp_dists[2] / sl_dist, 2) if sl_dist > 0 else None
 
     return {
-        "risk_pct": float(risk_pct),
-        "reward_pct": float(reward_pct),
+        "sl": sl,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "rr1": rr1,
+        "rr2": rr2,
+        "rr3": rr3,
     }
 
 
 # =========================
-# حساب TP/SL + R:R
-# =========================
-
-def compute_trade_levels(
-    symbol_norm: str,
-    price: float,
-    action: str,
-    risk_pct: float,
-    reward_pct: float,
-) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-    atr_value: Optional[float] = None
-    for tf_key in ["1h", "15m"]:
-        interval = TIMEFRAMES.get(tf_key)
-        if not interval:
-            continue
-
-        try:
-            ohlcv = fetch_klines(symbol_norm, interval, limit=200)
-            atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
-            atr_value = float(atr_vals[-1])
-            break
-        except Exception:
-            continue
-
-    sl_dist_pct = price * (risk_pct / 100.0)
-    tp_dist_pct = price * (reward_pct / 100.0)
-
-    if atr_value is not None:
-        sl_dist = max(sl_dist_pct, 1.2 * atr_value)
-        tp_dist = max(tp_dist_pct, 1.5 * atr_value)
-    else:
-        sl_dist = sl_dist_pct
-        tp_dist = tp_dist_pct
-
-    if sl_dist <= 0 or tp_dist <= 0 or action not in ("BUY", "SELL"):
-        return None, None, None
-
-    if action == "BUY":
-        sl = round(price - sl_dist, 4)
-        tp = round(price + tp_dist, 4)
-    else:
-        sl = round(price + sl_dist, 4)
-        tp = round(price - tp_dist, 4)
-
-    rr = round(tp_dist / sl_dist, 2) if sl_dist > 0 else None
-    return sl, tp, rr
-
-
-# =========================
-# generate_signal
+# نقطة الدخول الرئيسية
 # =========================
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
+    """
+    Main Ultra Engine entrypoint.
+    """
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
+    # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
+    # 1) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
 
+            # نخزن آخر سعر للفريمات المهمة
             if name == "1h":
                 last_close = tf_info.get("close", last_close)
             elif name == "15m" and last_close is None:
@@ -1064,17 +1029,27 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
+    # 2) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(tf_results)
 
     tp: Optional[float] = None
     sl: Optional[float] = None
     rr: Optional[float] = None
+
+    tp1: Optional[float] = None
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
+    rr1: Optional[float] = None
+    rr2: Optional[float] = None
+    rr3: Optional[float] = None
+
     risk_pct: Optional[float] = None
     reward_pct: Optional[float] = None
 
     if last_close is not None:
         price = float(last_close)
 
+        # نسب المخاطرة حسب الثقة
         if combined["confidence"] == "HIGH":
             risk_pct = 2.0
         elif combined["confidence"] == "MEDIUM":
@@ -1082,6 +1057,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
+        # مضاعف هدف الربح حسب السكور (للاستفادة لاحقاً إن حبينا)
         if combined["score"] >= 75:
             reward_mult = 2.5
         elif combined["score"] >= 65:
@@ -1090,17 +1066,28 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             reward_mult = 1.5
 
         reward_pct = risk_pct * reward_mult
-        action = combined["action"]
 
-        if action in ("BUY", "SELL"):
-            sl, tp, rr = compute_trade_levels(
-                symbol_norm=symbol_norm,
-                price=price,
-                action=action,
-                risk_pct=risk_pct,
-                reward_pct=reward_pct,
-            )
+        # حساب المستويات الديناميكية
+        levels = compute_trade_levels_multi(
+            decision=combined,
+            symbol_norm=symbol_norm,
+            price=price,
+            risk_pct=risk_pct,
+        )
 
+        sl = levels["sl"]
+        tp1 = levels["tp1"]
+        tp2 = levels["tp2"]
+        tp3 = levels["tp3"]
+        rr1 = levels["rr1"]
+        rr2 = levels["rr2"]
+        rr3 = levels["rr3"]
+
+        # التوافق مع البوت الحالي: نستخدم TP2 كهدف رئيسي
+        tp = tp2
+        rr = rr2
+
+    # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
 
     grade = combined.get("grade")
@@ -1111,7 +1098,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         reason_lines.append(f"تصنيف الإشارة (Grade): {grade}")
     reason_lines.append(f"وضع السوق العام: {market_regime}")
     if no_trade:
-        reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra Mode A.")
+        reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
 
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
     reason_lines.append(
@@ -1151,8 +1138,16 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr": rr,
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
+        # Multi-TP extra info
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
+        "rr1": rr1,
+        "rr2": rr2,
+        "rr3": rr3,
     }
 
+    # تسجيل الصفقات الفعلية فقط
     if (
         combined.get("action") in ("BUY", "SELL")
         and combined.get("no_trade") is False

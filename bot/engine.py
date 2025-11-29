@@ -609,7 +609,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
 def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """
-    دمج الفريمات في قرار واحد (Ultra Filter).
+    دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع فلتر حماية من الشراء في القمم والبيع في القيعان).
     """
     weights = {
         "15m": 0.2,
@@ -650,7 +650,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         elif tf_trend == "BEARISH":
             bearish_votes += w
 
-        # pump/dump
+        # Pump/Dump
         risk = data.get("pump_dump_risk", "LOW")
         if risk == "HIGH":
             max_pump_risk = "HIGH"
@@ -661,7 +661,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         liq_above_total += data.get("liq_above", 0.0) * w
         liq_below_total += data.get("liq_below", 0.0) * w
 
-        # وضع السوق (ترند / رينج)
+        # وضع السوق
         regime = data.get("market_regime")
         if regime == "TRENDING":
             trending_weight += w
@@ -685,7 +685,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         base_score = 50.0
 
-    # نسب توافق الاتجاه بين الفريمات
+    # توافق الاتجاه بين الفريمات
     bull_align = bullish_votes / total_weight if total_weight > 0 else 0.0
     bear_align = bearish_votes / total_weight if total_weight > 0 else 0.0
 
@@ -705,7 +705,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     else:
         global_regime = "MIXED"
 
-    # تجميع انحياز السيولة الكلي
+    # انحياز السيولة الكلي
     if liq_above_total + liq_below_total > 0:
         liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
         if liq_imbalance > 0.2:
@@ -720,19 +720,22 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         liquidity_bias = "FLAT"
         liquidity_score = 0.0
 
-    # RSI العام (1h + 4h)
+    # RSI من الفريمات العالية
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
+    rsi_1d = tf_data.get("1d", {}).get("rsi")
 
-    overbought = any(
-        r is not None and not np.isnan(r) and r > 70 for r in [rsi_1h, rsi_4h]
-    )
-    oversold = any(
-        r is not None and not np.isnan(r) and r < 30 for r in [rsi_1h, rsi_4h]
-    )
+    def _is_overbought(x):
+        return x is not None and not np.isnan(x) and x > 70.0
+
+    def _is_oversold(x):
+        return x is not None and not np.isnan(x) and x < 30.0
+
+    overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
+    oversold   = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
 
     # =========================
-    # تعديل السكور بالذكاء الجديد
+    # تعديل السكور
     # =========================
     combined_score = base_score
 
@@ -740,7 +743,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if global_regime == "TRENDING":
         combined_score += 3
 
-    # مكافأة/عقاب الاختراقات
+    # اختراقات
     if global_trend == "BULLISH":
         if breakout_up_weight > 0.15:
             combined_score += 4
@@ -758,7 +761,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if global_trend == "BEARISH" and bull_div_weight > 0.15:
         combined_score += 5
 
-    # السيولة
+    # السيولة مع/ضد الاتجاه
     if liquidity_bias == "UP" and global_trend == "BULLISH":
         combined_score += 3
     elif liquidity_bias == "DOWN" and global_trend == "BULLISH":
@@ -769,6 +772,29 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         combined_score -= 3
 
     combined_score = max(0.0, min(100.0, combined_score))
+
+    # =========================
+    # فلتر التمدد عن EMA200 (4H / 1D)
+    # =========================
+    def _extended_side(tf_name: str) -> str:
+        data = tf_data.get(tf_name, {})
+        c = data.get("close")
+        ema200 = data.get("ema200")
+        if c is None or ema200 is None or np.isnan(ema200) or ema200 == 0:
+            return "NONE"
+        dist_pct = abs(c - ema200) / abs(ema200) * 100.0
+        if dist_pct < 8.0:
+            return "NONE"
+        if c > ema200:
+            return "UP"
+        else:
+            return "DOWN"
+
+    ext_4h = _extended_side("4h")
+    ext_1d = _extended_side("1d")
+
+    extended_up   = (ext_4h == "UP") or (ext_1d == "UP")
+    extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
     # فريم مرجعي قوي (Anchor)
     strong_bull_anchor = (
@@ -792,7 +818,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     # =========================
     action = "WAIT"
 
-    # شروط BUY
+    # BUY
     if (
         combined_score >= 72
         and bull_align >= 0.6
@@ -802,7 +828,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "BUY"
 
-    # شروط SELL
+    # SELL
     if (
         combined_score <= 28
         and bear_align >= 0.6
@@ -811,12 +837,21 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "SELL"
 
-    # المنطقة الرمادية → نحتكم للسيولة إذا في أفضلية واضحة
+    # المنطقة الرمادية → نستخدم السيولة
     if action == "WAIT" and 60 <= combined_score < 72 and max_pump_risk != "HIGH":
-        if liquidity_bias == "UP" and bull_align >= 0.6 and strong_bull_anchor:
+        if liquidity_bias == "UP" and bull_align >= 0.6 and strong_bull_anchor and not overbought:
             action = "BUY"
-        elif liquidity_bias == "DOWN" and bear_align >= 0.6 and strong_bear_anchor:
+        elif liquidity_bias == "DOWN" and bear_align >= 0.6 and strong_bear_anchor and not oversold:
             action = "SELL"
+
+    # فلتر حماية نهائي
+    safety_block_buy  = overbought or extended_up
+    safety_block_sell = oversold   or extended_down
+
+    if action == "BUY" and safety_block_buy:
+        action = "WAIT"
+    if action == "SELL" and safety_block_sell:
+        action = "WAIT"
 
     # الثقة
     distance = abs(combined_score - 50.0)
@@ -855,15 +890,18 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     no_trade = False
 
-    # شروط المنطقة المحظورة No-Trade
     if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
         no_trade = True
 
     if action == "WAIT":
         no_trade = True
 
-    # لو السيولة تقريباً متعادلة تماماً → نعتبرها No-Trade
     if liquidity_score < 5:
+        no_trade = True
+
+    if safety_block_buy and action == "WAIT":
+        no_trade = True
+    if safety_block_sell and action == "WAIT":
         no_trade = True
 
     return {
@@ -880,7 +918,10 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         # معلومات إضافية
         "bull_align": round(float(bull_align), 2),
         "bear_align": round(float(bear_align), 2),
+        "safety_block_buy": bool(safety_block_buy),
+        "safety_block_sell": bool(safety_block_sell),
     }
+
 
 
 # =========================

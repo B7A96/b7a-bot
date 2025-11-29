@@ -389,23 +389,73 @@ def htf_trend_filter(htf_close, htf_ema):
         return "BEARISH"
     return "RANGING"
 
+def detect_sweeps(high: np.ndarray, low: np.ndarray, close: np.ndarray, lookback: int = 20) -> Tuple[bool, bool]:
+    """
+    يكتشف Liquidity Sweeps بسيطة:
+    - sweep_up  : كسر آخر قمة ثم إغلاق داخلها (جمع سيولة الشورت)
+    - sweep_down: كسر آخر قاع ثم إغلاق فوقه (جمع سيولة اللونغ)
+    """
+    if len(close) < lookback + 5:
+        return False, False
+
+    # أعلى / أدنى سعر قبل آخر شمعة (من غير شمعة اليوم)
+    recent_high = float(np.max(high[-lookback - 1: -1]))
+    recent_low  = float(np.min(low[-lookback - 1: -1]))
+
+    last_high = float(high[-1])
+    last_low  = float(low[-1])
+    last_close = float(close[-1])
+
+    sweep_down = last_low < recent_low and last_close > recent_low
+    sweep_up   = last_high > recent_high and last_close < recent_high
+
+    return sweep_up, sweep_down
+
+
+def detect_market_structure(high: np.ndarray, low: np.ndarray, lookback: int = 50) -> str:
+    """
+    يكشف كسر هيكل بسيط:
+    - BULLISH_BREAK  = كسر High مهم (HH)
+    - BEARISH_BREAK  = كسر Low مهم (LL)
+    - RANGE / NONE   = مافيه كسر واضح
+    """
+    if len(high) < lookback + 5:
+        return "NONE"
+
+    prev_hh = float(np.max(high[-lookback - 1: -1]))
+    prev_ll = float(np.min(low[-lookback - 1: -1]))
+
+    last_high = float(high[-1])
+    last_low  = float(low[-1])
+
+    broke_up   = last_high > prev_hh * 1.001   # كسر بقليل فوق
+    broke_down = last_low  < prev_ll * 0.999   # كسر بقليل تحت
+
+    if broke_up and not broke_down:
+        return "BULLISH_BREAK"
+    if broke_down and not broke_up:
+        return "BEARISH_BREAK"
+    return "RANGE"
+
 # =========================
 # تحليل كل فريم
 # =========================
 
 def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
     close = ohlcv["close"]
-    high = ohlcv["high"]
-    low = ohlcv["low"]
+    high  = ohlcv["high"]
+    low   = ohlcv["low"]
     volume = ohlcv["volume"]
 
     info: Dict[str, Any] = {"timeframe": name}
 
+    # EMA 200
     try:
         ema200 = ema(close, 200)[-1]
     except ValueError:
         ema200 = float("nan")
 
+    # RSI
     rsi_arr = None
     try:
         rsi_arr = rsi(close, 14)
@@ -414,6 +464,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         rsi_last = float("nan")
         rsi_arr = None
 
+    # MACD
     try:
         macd_line, sig_line = macd(close)
         macd_last = float(macd_line[-1])
@@ -422,6 +473,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         macd_last = float("nan")
         macd_signal_last = float("nan")
 
+    # Bollinger Bands
     try:
         lower_bb, mid_bb, upper_bb = bollinger_bands(close)
         lower_last = float(lower_bb[-1])
@@ -430,24 +482,32 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         lower_last = float("nan")
         upper_last = float("nan")
 
+    # VWAP
     vwap_arr = vwap(high, low, close, volume)
     vwap_last = float(vwap_arr[-1])
 
+    # تغيّر السعر + انفجار الفوليوم
     vol_surge = volume_surge(volume)
-    change_1 = price_change(close, 1)
-    change_4 = price_change(close, 4)
+    change_1  = price_change(close, 1)
+    change_4  = price_change(close, 4)
+
+    # ✅ Smart Money Lite: sweeps + structure
+    sweep_up, sweep_down = detect_sweeps(high, low, close)
+    structure = detect_market_structure(high, low)
 
     bullish_points = 0
     bearish_points = 0
 
     last_close = float(close[-1])
 
+    # اتجاه السعر مقابل EMA200
     if not np.isnan(ema200):
         if last_close > ema200:
             bullish_points += 1
         else:
             bearish_points += 1
 
+    # سلوك RSI
     if not np.isnan(rsi_last):
         if 50 <= rsi_last <= 70:
             bullish_points += 1
@@ -456,18 +516,23 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         elif rsi_last < 30:
             bullish_points += 1
 
+    # MACD cross
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
             bullish_points += 1
         else:
             bearish_points += 1
 
+    # لمس Bollinger Bands
     if not np.isnan(lower_last) and not np.isnan(upper_last):
         if last_close <= lower_last:
             bullish_points += 1
         elif last_close >= upper_last:
             bearish_points += 1
 
+    # =========================
+    # Market Regime Detector
+    # =========================
     try:
         atr_vals = atr(high, low, close, period=14)
         atr_last = float(atr_vals[-1])
@@ -480,19 +545,22 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         not np.isnan(ema200)
         and not np.isnan(atr_last)
         and distance_from_ema200 > atr_last * 1.2
-        and atr_last > (0.002 * last_close)
+        and atr_last > (0.002 * last_close)  # ATR > 0.2% من السعر
     ):
         market_regime = "TRENDING"
     else:
         market_regime = "RANGING"
 
+    # =========================
+    # Breakouts
+    # =========================
     lookback = min(20, len(close))
     if lookback < 5:
         recent_high = last_close
-        recent_low = last_close
+        recent_low  = last_close
     else:
         recent_high = float(np.max(high[-lookback:]))
-        recent_low = float(np.min(low[-lookback:]))
+        recent_low  = float(np.min(low[-lookback:]))
 
     is_breakout_up = False
     is_breakout_down = False
@@ -503,6 +571,9 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if last_close < recent_low and change_1 < 0:
         is_breakout_down = True
 
+    # =========================
+    # RSI Divergence بسيطة
+    # =========================
     has_bull_div = False
     has_bear_div = False
 
@@ -514,8 +585,10 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         curr_rsi = rsi_arr[-1]
 
         if not np.isnan(prev_rsi) and not np.isnan(curr_rsi):
+            # Bullish: السعر ينزل و RSI يطلع
             if curr_low < prev_low and curr_rsi > prev_rsi:
                 has_bull_div = True
+            # Bearish: السعر يطلع و RSI ينزل
             if curr_low > prev_low and curr_rsi < prev_rsi:
                 has_bear_div = True
 
@@ -524,6 +597,21 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if has_bear_div:
         bearish_points += 1
 
+    # ✅ تأثير sweeps على النقاط
+    if sweep_down:
+        bullish_points += 2
+    if sweep_up:
+        bearish_points += 2
+
+    # ✅ تأثير كسر الهيكل على النقاط
+    if structure == "BULLISH_BREAK":
+        bullish_points += 2
+    elif structure == "BEARISH_BREAK":
+        bearish_points += 2
+
+    # =========================
+    # Trend Score + Pump/Dump
+    # =========================
     trend_score = (bullish_points - bearish_points) * 10 + 50
 
     if market_regime == "TRENDING" and (is_breakout_up or is_breakout_down):
@@ -539,8 +627,9 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if abs(change_1) > 6 and vol_surge:
         pump_dump_risk = "HIGH"
 
-    liq_map = build_liquidity_map(ohlcv, name)
-    liq_bias = liq_map.get("bias", "FLAT")
+    # خريطة السيولة لهذا الفريم
+    liq_map   = build_liquidity_map(ohlcv, name)
+    liq_bias  = liq_map.get("bias", "FLAT")
     liq_score = liq_map.get("score", 0.0)
     liq_above = liq_map.get("above_strength", 0.0)
     liq_below = liq_map.get("below_strength", 0.0)
@@ -570,17 +659,24 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "is_breakout_down": is_breakout_down,
             "has_bull_div": has_bull_div,
             "has_bear_div": has_bear_div,
+            # 🔥 إضافات Smart Money Lite
+            "sweep_up": sweep_up,
+            "sweep_down": sweep_down,
+            "structure_break": structure,
         }
     )
 
+    # اتجاه نهائي للفريم
     if bullish_points > bearish_points:
         info["trend"] = "BULLISH"
     elif bearish_points > bullish_points:
+        info["trend"] = "BEARISH"
         info["trend"] = "BEARISH"
     else:
         info["trend"] = "RANGING"
 
     return info
+
 
 
 # =========================

@@ -16,9 +16,6 @@ TIMEFRAMES = {
     "1d": "1d",
 }
 
-# رموز نستخدمها كسياق عام للسوق
-GLOBAL_CONTEXT_SYMBOLS = ["BTC", "ETH"]
-
 
 class MarketDataError(Exception):
     pass
@@ -61,9 +58,9 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
     }
 
 
-# ================
+# =========================
 # Trade Logger
-# ================
+# =========================
 
 def log_trade(data: Dict[str, Any]):
     log_file = "trades_log.csv"
@@ -101,9 +98,9 @@ def log_trade(data: Dict[str, Any]):
         ])
 
 
-# ================
+# =========================
 # Indicators
-# ================
+# =========================
 
 def ema(series: np.ndarray, period: int) -> np.ndarray:
     if series.size < period:
@@ -215,9 +212,9 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     return atr_values
 
 
-# ================
-# Liquidity Map
-# ================
+# =========================
+# Liquidity Map Engine
+# =========================
 
 def _detect_swings(high: np.ndarray, low: np.ndarray,
                    left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
@@ -353,9 +350,9 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
     }
 
 
-# ================
+# =========================
 # تحليل كل فريم
-# ================
+# =========================
 
 def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
     close = ohlcv["close"]
@@ -547,35 +544,9 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     return info
 
 
-# ================
-# BTC/ETH Context
-# ================
-
-def get_global_context() -> Dict[str, str]:
-    ctx: Dict[str, str] = {}
-    for base in GLOBAL_CONTEXT_SYMBOLS:
-        sym = _normalize_symbol(base)
-        try:
-            ohlcv = fetch_klines(sym, "1h", limit=200)
-            close = ohlcv["close"]
-            if close.size < 50:
-                ctx[base] = "UNKNOWN"
-                continue
-            ema200_val = ema(close, 200)[-1] if close.size >= 200 else float("nan")
-            last_close = float(close[-1])
-            if not np.isnan(ema200_val):
-                trend = "BULLISH" if last_close > ema200_val else "BEARISH"
-            else:
-                trend = "UNKNOWN"
-            ctx[base] = trend
-        except Exception:
-            ctx[base] = "UNKNOWN"
-    return ctx
-
-
-# ================
-# دمج الفريمات
-# ================
+# =========================
+# دمج الفريمات واتخاذ القرار (Mode A)
+# =========================
 
 def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     weights = {
@@ -738,6 +709,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     action = "WAIT"
 
+    # Mode A – شروط مشددة
     if (
         combined_score >= 72
         and bull_align >= 0.6
@@ -772,6 +744,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if max_pump_risk == "HIGH" and action == "BUY":
         action = "WAIT"
 
+    # Grade
     if (
         combined_score >= 80
         and confidence == "HIGH"
@@ -800,6 +773,12 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if liquidity_score < 5:
         no_trade = True
 
+    # Mode A – High Precision:
+    # ما ندخل إلا على A و A+ فقط
+    if grade not in ("A", "A+"):
+        action = "WAIT"
+        no_trade = True
+
     return {
         "score": round(float(combined_score), 2),
         "trend": global_trend,
@@ -816,9 +795,9 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# ================
+# =========================
 # اختيار نسب المخاطرة / الربح
-# ================
+# =========================
 
 def choose_risk_reward(decision: Dict[str, Any],
                        tf_results: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
@@ -870,9 +849,9 @@ def choose_risk_reward(decision: Dict[str, Any],
     }
 
 
-# ================
-# TP/SL + R:R
-# ================
+# =========================
+# حساب TP/SL + R:R
+# =========================
 
 def compute_trade_levels(
     symbol_norm: str,
@@ -919,9 +898,9 @@ def compute_trade_levels(
     return sl, tp, rr
 
 
-# ================
-# Main
-# ================
+# =========================
+# generate_signal
+# =========================
 
 def generate_signal(symbol: str) -> Dict[str, Any]:
     symbol_norm = _normalize_symbol(symbol)
@@ -949,10 +928,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "trend_score": 50,
                 "pump_dump_risk": "LOW",
             }
-
-    global_ctx = get_global_context()
-    btc_trend = global_ctx.get("BTC", "UNKNOWN")
-    eth_trend = global_ctx.get("ETH", "UNKNOWN")
 
     combined = combine_timeframes(tf_results)
 
@@ -991,24 +966,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 reward_pct=reward_pct,
             )
 
-            # فلتر R:R – نرفض الصفقات ذات العائد الضعيف
-            MIN_RR = 1.8
-            if rr is not None and rr < MIN_RR:
-                combined["no_trade"] = True
-                combined["action"] = "WAIT"
-                combined["grade"] = "C"
-
-            # فلتر اتجاه BTC – لا ندخل عكس الاتجاه العام إلا لو الصفقة خارقة
-            if combined["action"] == "BUY" and btc_trend == "BEARISH" and combined["score"] < 80:
-                combined["no_trade"] = True
-                combined["action"] = "WAIT"
-                combined["grade"] = "C"
-
-            if combined["action"] == "SELL" and btc_trend == "BULLISH" and combined["score"] < 80:
-                combined["no_trade"] = True
-                combined["action"] = "WAIT"
-                combined["grade"] = "C"
-
     reason_lines: List[str] = []
 
     grade = combined.get("grade")
@@ -1018,11 +975,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     if grade:
         reason_lines.append(f"تصنيف الإشارة (Grade): {grade}")
     reason_lines.append(f"وضع السوق العام: {market_regime}")
-    reason_lines.append(f"اتجاه BTC: {btc_trend} | اتجاه ETH: {eth_trend}")
     if no_trade:
-        reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
+        reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra Mode A.")
 
-    reason_lines.append(f"الاتجاه العام للعملة: {combined['trend']}")
+    reason_lines.append(f"الاتجاه العام: {combined['trend']}")
     reason_lines.append(
         "أقوى الفريمات: "
         + ", ".join(
@@ -1060,8 +1016,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr": rr,
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
-        "btc_trend": btc_trend,
-        "eth_trend": eth_trend,
     }
 
     if (

@@ -291,9 +291,12 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# /scan – Smart Scanner (Top Volume)
+# /scan – Ultra Trader Mode (A/B فقط + BUY/SELL)
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔍 جارِ فحص أعلى عملات USDT من حيث الفوليوم...")
+    await update.message.reply_text(
+        "🔍 جارِ تشغيل B7A Ultra Trader Scan...\n"
+        "📡 البحث عن أقوى فرص BUY / SELL بدرجة A و B فقط."
+    )
 
     try:
         symbols = get_top_usdt_symbols(limit=40)
@@ -303,38 +306,119 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     results = []
+
     for symbol in symbols:
         try:
             data = generate_signal(symbol)
             decision = data.get("decision", {})
-            action = decision.get("action", "WAIT")
-            score = decision.get("score", 50)
-            grade = decision.get("grade", "C")
-            if action != "WAIT":
-                results.append((symbol, action, score, grade, decision))
+
+            action        = decision.get("action", "WAIT")
+            score         = float(decision.get("score", 50))
+            grade         = decision.get("grade", "C")
+            confidence    = decision.get("confidence", "LOW")
+            pump_risk     = decision.get("pump_dump_risk", "LOW")
+            no_trade      = bool(decision.get("no_trade", False))
+            trend         = decision.get("trend", "RANGING")
+            market_regime = decision.get("market_regime", "UNKNOWN")
+            liq_bias      = decision.get("liquidity_bias", "FLAT")
+
+            rr        = data.get("rr")
+            risk_pct  = data.get("risk_pct")
+            reward_pct= data.get("reward_pct")
+
+            # ===== فلتر Ultra Trader Mode =====
+            if action not in ("BUY", "SELL"):
+                continue
+
+            if no_trade:
+                continue
+
+            if grade not in ("A+", "A", "B"):
+                continue
+
+            if score < 60:
+                continue
+
+            if confidence not in ("HIGH", "MEDIUM"):
+                continue
+
+            if pump_risk == "HIGH":
+                continue
+
+            # نخلي السيولة على الأقل مو سيئة جداً
+            # (نسمح بـ FLAT / UP / DOWN عادي، المهم مو Pump خطر)
+            tv_symbol = data.get("symbol", symbol)
+            results.append(
+                (
+                    tv_symbol,
+                    action,
+                    score,
+                    grade,
+                    trend,
+                    market_regime,
+                    liq_bias,
+                    rr,
+                    risk_pct,
+                    reward_pct,
+                    confidence,
+                    pump_risk,
+                )
+            )
+
         except Exception as e:
             print("Scan error for", symbol, ":", e)
             continue
 
     if not results:
-        await update.message.reply_text("ما في فرص قوية واضحة حالياً في السوق حسب الفلتر.")
+        await update.message.reply_text(
+            "🚫 ما في فرص مناسبة حالياً حسب فلتر B7A Ultra Trader.\n"
+            "جرّب بعد شوي أو على جلسة مختلفة."
+        )
         return
 
+    # نرتب من الأقوى للأضعف
     results.sort(key=lambda x: x[2], reverse=True)
-    top = results[:5]
+    top = results[:8]
 
-    lines = ["📊 أفضل الفرص الحالية (Top Volume Scanner):\n"]
-    for symbol, action, score, grade, decision in top:
-        trend = decision.get("trend", "RANGING")
-        pump = decision.get("pump_dump_risk", "LOW")
-        lines.append(
-            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | "
-            f"Trend: {trend} | Pump: {pump}"
+    lines: List[str] = []
+    lines.append("📊 B7A Ultra Trader – أفضل الفرص الحالية:\n")
+
+    for (
+        tv_symbol,
+        action,
+        score,
+        grade,
+        trend,
+        market_regime,
+        liq_bias,
+        rr,
+        risk_pct,
+        reward_pct,
+        confidence,
+        pump_risk,
+    ) in top:
+        # نطبع الرمز بشكل نظيف
+        base_symbol = tv_symbol.replace("USDT", "")
+
+        side_emoji = "🟢 BUY" if action == "BUY" else "🔴 SELL"
+
+        line = (
+            f"• {base_symbol}: {side_emoji} | Grade: {grade} | "
+            f"Score: {score:.0f} | Conf: {confidence} | Pump: {pump_risk}\n"
+            f"  Trend: {trend} | Regime: {market_regime} | Liquidity: {liq_bias}"
         )
 
-    lines.append("\nاستخدم /signal BTC مثلاً لعرض تحليل مفصل لأي عملة.")
+        if rr is not None:
+            line += f" | R:R ≈ {rr}"
 
+        if risk_pct is not None and reward_pct is not None:
+            line += f" | Risk ~{risk_pct:.1f}% / Reward ~{reward_pct:.1f}%"
+
+        lines.append(line)
+
+    lines.append("\nاستخدم /signal BTC مثلاً لعرض تفاصيل أي عملة من القائمة.")
     await update.message.reply_text("\n".join(lines))
+
 
 
 # /scan_watchlist – فحص قائمة المراقبة الخاصة

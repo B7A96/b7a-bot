@@ -813,58 +813,100 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         and tf_data.get("1d", {}).get("trend_score", 50) >= 55
     )
 
-    # =========================
-    # اتخاذ قرار BUY / SELL / WAIT
+       # =========================
+    # اتخاذ قرار BUY / SELL / WAIT  (Balanced Mode)
     # =========================
     action = "WAIT"
 
-    # BUY
+    # شروط BUY (أخف من قبل بس ما زالت قوية)
     if (
-        combined_score >= 72
-        and bull_align >= 0.6
+        combined_score >= 65.0
+        and bull_align >= 0.50
         and not overbought
         and max_pump_risk != "HIGH"
-        and strong_bull_anchor
+        and (
+            strong_bull_anchor
+            or (global_regime == "TRENDING" and liquidity_bias in ("UP", "FLAT"))
+        )
     ):
         action = "BUY"
 
-    # SELL
+    # شروط SELL (تم تخفيفها أيضاً عشان يطلع لنا صفقات شورت)
     if (
-        combined_score <= 28
-        and bear_align >= 0.6
+        combined_score <= 35.0
+        and bear_align >= 0.50
         and not oversold
-        and strong_bear_anchor
+        and (
+            strong_bear_anchor
+            or (global_regime == "TRENDING" and liquidity_bias in ("DOWN", "FLAT"))
+        )
     ):
         action = "SELL"
 
-    # المنطقة الرمادية → نستخدم السيولة
-    if action == "WAIT" and 60 <= combined_score < 72 and max_pump_risk != "HIGH":
-        if liquidity_bias == "UP" and bull_align >= 0.6 and strong_bull_anchor and not overbought:
+    # المنطقة الرمادية → نستخدم السيولة + الاختراقات
+    if action == "WAIT" and 55.0 <= combined_score < 65.0 and max_pump_risk != "HIGH":
+        if (
+            liquidity_bias == "UP"
+            and bull_align >= 0.45
+            and (strong_bull_anchor or breakout_up_weight > 0.20)
+        ):
             action = "BUY"
-        elif liquidity_bias == "DOWN" and bear_align >= 0.6 and strong_bear_anchor and not oversold:
+        elif (
+            liquidity_bias == "DOWN"
+            and bear_align >= 0.45
+            and (strong_bear_anchor or breakout_down_weight > 0.20)
+        ):
             action = "SELL"
-
-    # فلتر حماية نهائي
-    safety_block_buy  = overbought or extended_up
-    safety_block_sell = oversold   or extended_down
-
-    if action == "BUY" and safety_block_buy:
-        action = "WAIT"
-    if action == "SELL" and safety_block_sell:
-        action = "WAIT"
 
     # الثقة
     distance = abs(combined_score - 50.0)
-    if distance > 25:
+    if distance >= 22:
         confidence = "HIGH"
-    elif distance > 15:
+    elif distance >= 12:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
 
     # حماية من Pump/Dump
-    if max_pump_risk == "HIGH" and action == "BUY":
+    if max_pump_risk == "HIGH" and action in ("BUY", "SELL"):
         action = "WAIT"
+
+    # =========================
+    # Grade + No-Trade (Balanced)
+    # =========================
+    if (
+        combined_score >= 78
+        and confidence == "HIGH"
+        and max_pump_risk == "LOW"
+        and ((action == "BUY" and bull_align >= 0.65) or (action == "SELL" and bear_align >= 0.65))
+    ):
+        grade = "A+"
+    elif (
+        combined_score >= 68
+        and max_pump_risk != "HIGH"
+        and confidence in ("HIGH", "MEDIUM")
+        and (bull_align >= 0.50 or bear_align >= 0.50)
+    ):
+        grade = "A"
+    elif combined_score >= 55:
+        grade = "B"
+    else:
+        grade = "C"
+
+    no_trade = False
+
+    # منطقة محظورة لو الإشارة ضعيفة فعلاً
+    if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
+        no_trade = True
+
+    # لو مافي قرار واضح → No-Trade
+    if action == "WAIT":
+        no_trade = True
+
+    # لو السيولة متعادلة تقريباً جداً → نخليها No-Trade (فلتر حماية)
+    if liquidity_score < 5:
+        no_trade = True
+
 
     # =========================
     # Grade + No-Trade

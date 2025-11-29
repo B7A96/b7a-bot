@@ -349,6 +349,45 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
         "last_price": last_close,
     }
 
+# =========================
+# Smart Money Lite Engine
+# =========================
+
+def detect_sweeps(high, low, close):
+    sweep_up = False
+    sweep_down = False
+
+    # Sweep Down → شمعة نزلت تحت آخر قاع ثم رجعت أغلقت فوقه
+    if close[-1] > low[-2] and low[-1] < low[-2]:
+        sweep_down = True
+
+    # Sweep Up → شمعة صعدت فوق آخر قمة ثم رجعت أغلقت تحتها
+    if close[-1] < high[-2] and high[-1] > high[-2]:
+        sweep_up = True
+
+    return sweep_up, sweep_down
+
+
+def detect_market_structure(high, low, close):
+    # CHoCH / MSS بسيط
+    structure = "RANGING"
+    bullish = close[-1] > high[-2]
+    bearish = close[-1] < low[-2]
+
+    if bullish:
+        structure = "BULLISH_BREAK"
+    elif bearish:
+        structure = "BEARISH_BREAK"
+
+    return structure
+
+
+def htf_trend_filter(htf_close, htf_ema):
+    if htf_close > htf_ema:
+        return "BULLISH"
+    elif htf_close < htf_ema:
+        return "BEARISH"
+    return "RANGING"
 
 # =========================
 # تحليل كل فريم

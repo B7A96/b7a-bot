@@ -107,7 +107,8 @@ def log_trade(data: Dict[str, Any]):
                 "tp", "sl", "rr",
                 "grade", "score", "confidence",
                 "pump_risk", "market_regime", "liquidity_bias",
-                "no_trade"
+                "no_trade",
+                "risk_pct", "reward_pct",   # ✅ أضفناهم هنا
             ])
 
         decision = data.get("decision", {})
@@ -123,11 +124,14 @@ def log_trade(data: Dict[str, Any]):
             decision.get("grade"),
             decision.get("score"),
             decision.get("confidence"),
-            decision.get("pump_dump_risk"),
+            decision.get("pump_dump_risk"),   # هذا يروح في عمود pump_risk
             decision.get("market_regime"),
             decision.get("liquidity_bias"),
             decision.get("no_trade"),
+            data.get("risk_pct"),             # ✅ الآن /stats يقدر يقرأهم
+            data.get("reward_pct"),           # ✅
         ])
+
 
 
 # =========================

@@ -892,25 +892,25 @@ def combine_timeframes(
         and max_pump_risk != "HIGH"
         and (
             strong_bull_anchor
-            or (global_regime == "TRENDING" and liquidity_bias in ("UP", "FLAT"))
+            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("UP", "FLAT"))
         )
     ):
         action = "BUY"
 
     # شروط SELL (تم تخفيفها أيضاً عشان يطلع لنا صفقات شورت)
     if (
-        combined_score <= 35.0
-        and bear_align >= 0.50
+        combined_score <= 45.0
+        and bear_align >= 0.45
         and not oversold
         and (
             strong_bear_anchor
-            or (global_regime == "TRENDING" and liquidity_bias in ("DOWN", "FLAT"))
+            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("DOWN", "FLAT"))
         )
     ):
         action = "SELL"
 
     # المنطقة الرمادية → نستخدم السيولة + الاختراقات
-    if action == "WAIT" and 55.0 <= combined_score < 65.0 and max_pump_risk != "HIGH":
+    if action == "WAIT" and 50.0 <= combined_score < 65.0 and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
             and bull_align >= 0.45

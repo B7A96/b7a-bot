@@ -830,7 +830,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     # =========================
     action = "WAIT"
 
-    # شروط BUY (أخف من قبل بس ما زالت قوية)
+    # شروط BUY (نخليها مثل ما هي تقريباً)
     if (
         combined_score >= 65.0
         and bull_align >= 0.50
@@ -843,14 +843,16 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "BUY"
 
-    # شروط SELL (تم تخفيفها أيضاً عشان يطلع لنا صفقات شورت)
+    # شروط SELL (تخفيف محترم عشان يعطي صفقات شورت)
     if (
-        combined_score <= 35.0
-        and bear_align >= 0.50
+        combined_score <= 45.0
+        and bear_align >= 0.45
         and not oversold
+        and max_pump_risk != "HIGH"
         and (
             strong_bear_anchor
-            or (global_regime == "TRENDING" and liquidity_bias in ("DOWN", "FLAT"))
+            or global_trend == "BEARISH"
+            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("DOWN", "FLAT"))
         )
     ):
         action = "SELL"
@@ -888,6 +890,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         action = "WAIT"
     if safety_block_sell and action == "SELL":
         action = "WAIT"
+
 
     # =========================
     # Grade + No-Trade (Balanced)

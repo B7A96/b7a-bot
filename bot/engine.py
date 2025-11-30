@@ -813,7 +813,19 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         and tf_data.get("1d", {}).get("trend_score", 50) >= 55
     )
 
-       # =========================
+    # ===== فلتر حماية ذكي من الشراء في القمم / البيع في القيعان =====
+    safety_block_buy = False
+    safety_block_sell = False
+
+    # مثال: ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
+    if global_trend == "BULLISH" and extended_up and overbought:
+        safety_block_buy = True
+
+    # مثال: ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
+    if global_trend == "BEARISH" and extended_down and oversold:
+        safety_block_sell = True
+
+    # =========================
     # اتخاذ قرار BUY / SELL / WAIT  (Balanced Mode)
     # =========================
     action = "WAIT"
@@ -871,6 +883,12 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if max_pump_risk == "HIGH" and action in ("BUY", "SELL"):
         action = "WAIT"
 
+    # تطبيق فلتر الحماية
+    if safety_block_buy and action == "BUY":
+        action = "WAIT"
+    if safety_block_sell and action == "SELL":
+        action = "WAIT"
+
     # =========================
     # Grade + No-Trade (Balanced)
     # =========================
@@ -905,45 +923,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     # لو السيولة متعادلة تقريباً جداً → نخليها No-Trade (فلتر حماية)
     if liquidity_score < 5:
-        no_trade = True
-
-
-    # =========================
-    # Grade + No-Trade
-    # =========================
-    if (
-        combined_score >= 80
-        and confidence == "HIGH"
-        and max_pump_risk == "LOW"
-        and ((action == "BUY" and bull_align >= 0.7) or (action == "SELL" and bear_align >= 0.7))
-    ):
-        grade = "A+"
-    elif (
-        combined_score >= 70
-        and max_pump_risk != "HIGH"
-        and confidence in ("HIGH", "MEDIUM")
-        and (bull_align >= 0.55 or bear_align >= 0.55)
-    ):
-        grade = "A"
-    elif combined_score >= 58:
-        grade = "B"
-    else:
-        grade = "C"
-
-    no_trade = False
-
-    if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
-        no_trade = True
-
-    if action == "WAIT":
-        no_trade = True
-
-    if liquidity_score < 5:
-        no_trade = True
-
-    if safety_block_buy and action == "WAIT":
-        no_trade = True
-    if safety_block_sell and action == "WAIT":
         no_trade = True
 
     return {

@@ -35,6 +35,25 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 # =========================
+# Arkham Smart Money Intel (Placeholder)
+# =========================
+
+def get_arkham_intel(symbol: str) -> Dict[str, Any]:
+    """
+    Placeholder لـ Arkham Intelligence.
+    حالياً ترجع قيم محايدة، لاحقاً نستبدلها بنداءات API الحقيقية.
+    """
+    return {
+        "whale_inflow_score": 0.0,    # قوة دخول حيتان (0 - 100)
+        "whale_outflow_score": 0.0,   # قوة خروج حيتان (0 - 100)
+        "smart_money_bias": "NEUTRAL",  # UP / DOWN / NEUTRAL
+        "cex_inflow_score": 0.0,      # عملات داخلة للمنصات (احتمال بيع)
+        "cex_outflow_score": 0.0,     # عملات خارجة من المنصات (احتمال تجميع)
+        "intel_confidence": "LOW",    # LOW / MEDIUM / HIGH
+    }
+
+
+# =========================
 # جلب البيانات من Binance
 # =========================
 
@@ -607,9 +626,14 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 # دمج الفريمات واتخاذ القرار
 # =========================
 
-def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def combine_timeframes(
+    tf_data: Dict[str, Dict[str, Any]],
+    arkham_intel: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
-    دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع فلتر حماية من الشراء في القمم والبيع في القيعان).
+    دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع:
+    - فلتر حماية من الشراء في القمم والبيع في القيعان
+    - إضافة ذكية من Arkham Smart Money (لو موجودة).
     """
     weights = {
         "15m": 0.2,
@@ -732,10 +756,10 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         return x is not None and not np.isnan(x) and x < 30.0
 
     overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
-    oversold   = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
+    oversold = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
 
     # =========================
-    # تعديل السكور
+    # تعديل السكور الكلاسيكي
     # =========================
     combined_score = base_score
 
@@ -770,6 +794,36 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         combined_score += 3
     elif liquidity_bias == "UP" and global_trend == "BEARISH":
         combined_score -= 3
+
+    # =========================
+    # Arkham Smart Money Boost (خفيف وآمن)
+    # =========================
+    if arkham_intel:
+        try:
+            whale_in = float(arkham_intel.get("whale_inflow_score", 0.0) or 0.0)
+            whale_out = float(arkham_intel.get("whale_outflow_score", 0.0) or 0.0)
+            intel_bias = arkham_intel.get("smart_money_bias", "NEUTRAL")
+            intel_conf = arkham_intel.get("intel_confidence", "LOW")
+
+            # وزن الثقة
+            intel_weight_map = {"LOW": 0.3, "MEDIUM": 0.7, "HIGH": 1.0}
+            intel_weight = intel_weight_map.get(intel_conf, 0.3)
+
+            # فرق دخول/خروج الحيتان
+            raw_delta = (whale_in - whale_out) / 100.0  # يتحول من 0-100 إلى 0-1
+            # تأثير أقصى ±3 نقاط على السكور
+            delta = raw_delta * 3.0 * intel_weight
+
+            # لو البايس عكسي مع الترند نخفف أكثر
+            if intel_bias == "UP" and global_trend == "BEARISH":
+                delta *= 0.5
+            if intel_bias == "DOWN" and global_trend == "BULLISH":
+                delta *= 0.5
+
+            combined_score += delta
+        except Exception:
+            # أي مشكلة في البيانات نتجاهل Arkham نهائياً
+            pass
 
     combined_score = max(0.0, min(100.0, combined_score))
 
@@ -817,11 +871,11 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     safety_block_buy = False
     safety_block_sell = False
 
-    # مثال: ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
+    # ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
     if global_trend == "BULLISH" and extended_up and overbought:
         safety_block_buy = True
 
-    # مثال: ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
+    # ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
     if global_trend == "BEARISH" and extended_down and oversold:
         safety_block_sell = True
 
@@ -830,7 +884,7 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     # =========================
     action = "WAIT"
 
-    # شروط BUY (نخليها مثل ما هي تقريباً)
+    # شروط BUY (أخف من قبل بس ما زالت قوية)
     if (
         combined_score >= 65.0
         and bull_align >= 0.50
@@ -843,16 +897,14 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     ):
         action = "BUY"
 
-    # شروط SELL (تخفيف محترم عشان يعطي صفقات شورت)
+    # شروط SELL (تم تخفيفها أيضاً عشان يطلع لنا صفقات شورت)
     if (
-        combined_score <= 45.0
-        and bear_align >= 0.45
+        combined_score <= 35.0
+        and bear_align >= 0.50
         and not oversold
-        and max_pump_risk != "HIGH"
         and (
             strong_bear_anchor
-            or global_trend == "BEARISH"
-            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("DOWN", "FLAT"))
+            or (global_regime == "TRENDING" and liquidity_bias in ("DOWN", "FLAT"))
         )
     ):
         action = "SELL"
@@ -890,7 +942,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         action = "WAIT"
     if safety_block_sell and action == "SELL":
         action = "WAIT"
-
 
     # =========================
     # Grade + No-Trade (Balanced)
@@ -945,7 +996,6 @@ def combine_timeframes(tf_data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "safety_block_buy": bool(safety_block_buy),
         "safety_block_sell": bool(safety_block_sell),
     }
-
 
 
 # =========================
@@ -1071,7 +1121,13 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) نجيب بيانات كل الفريمات
+    # 1) نحاول جلب Arkham Intel (لو متوفر مستقبلاً)
+    try:
+        arkham_intel = get_arkham_intel(symbol_norm)
+    except Exception:
+        arkham_intel = None
+
+    # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
@@ -1094,8 +1150,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 2) ندمج الفريمات في قرار واحد
-    combined = combine_timeframes(tf_results)
+    # 3) ندمج الفريمات في قرار واحد + Arkham
+    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
 
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -1122,7 +1178,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
-        # مضاعف هدف الربح حسب السكور (للاستفادة لاحقاً إن حبينا)
+        # مضاعف هدف الربح حسب السكور
         if combined["score"] >= 75:
             reward_mult = 2.5
         elif combined["score"] >= 65:
@@ -1210,6 +1266,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr1": rr1,
         "rr2": rr2,
         "rr3": rr3,
+        # Arkham intel (حالياً Placeholder)
+        "arkham_intel": arkham_intel,
     }
 
     # تسجيل الصفقات الفعلية فقط

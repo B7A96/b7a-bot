@@ -56,8 +56,9 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
         "intel_confidence": "LOW",      # LOW / MEDIUM / HIGH
     }
 
+
 # =========================
-# Coinglass Intel (قابل للتطوير حسب الـ API الحقيقي)
+# Coinglass Intel
 # =========================
 
 def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
@@ -109,7 +110,6 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
             )
             if resp.status_code == 200:
                 data = resp.json()
-                # ✅ عدّل حسب شكل استجابة Coinglass الحقيقية
                 item = None
                 if isinstance(data, dict):
                     item = data.get("data") or data
@@ -148,7 +148,6 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
             )
             if resp.status_code == 200:
                 data = resp.json()
-                # ✅ عدّل حسب استجابة Coinglass الحقيقية
                 item = None
                 if isinstance(data, dict):
                     item = data.get("data") or data
@@ -186,6 +185,7 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
         "liq_bias": liq_bias,
     }
 
+
 # =========================
 # جلب البيانات من Binance
 # =========================
@@ -221,6 +221,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
         "close": np.array(closes, dtype=float),
         "volume": np.array(volumes, dtype=float),
     }
+
 
 # =========================
 # Orderbook Pressure Engine
@@ -324,6 +325,7 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
         "bid_walls": bid_walls,
         "ask_walls": ask_walls,
     }
+
 
 # =========================
 # Trade Logger
@@ -1296,7 +1298,6 @@ def combine_timeframes(
     }
 
 
-
 # =========================
 # Dynamic ATR Multi-TP
 # =========================
@@ -1426,6 +1427,12 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     except Exception:
         arkham_intel = None
 
+    # 1.25) نحاول جلب Orderbook Intel
+    try:
+        orderbook_intel = analyse_orderbook(symbol_norm, limit=100)
+    except Exception:
+        orderbook_intel = None
+
     # 1.5) نحاول جلب Coinglass Intel (لو متوفر)
     try:
         coinglass = get_coinglass_intel(symbol_norm)
@@ -1455,8 +1462,12 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 3) ندمج الفريمات في قرار واحد + Arkham
-    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
+    # 3) ندمج الفريمات في قرار واحد + Arkham + Orderbook
+    combined = combine_timeframes(
+        tf_results,
+        arkham_intel=arkham_intel,
+        orderbook_intel=orderbook_intel,
+    )
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:
@@ -1577,6 +1588,19 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
 
+    # 📘 Orderbook Intel Summary
+    ob_bias = combined.get("orderbook_bias", "FLAT")
+    ob_score = combined.get("orderbook_score", 0.0)
+    if ob_score and ob_score > 0:
+        if ob_bias == "BID":
+            reason_lines.append(
+                f"ضغط المشترين في دفتر الأوامر (Orderbook BID) ملحوظ (Score ≈ {ob_score:.0f}) → الطلبات متقدّمة حالياً."
+            )
+        elif ob_bias == "ASK":
+            reason_lines.append(
+                f"ضغط البائعين في دفتر الأوامر (Orderbook ASK) ملحوظ (Score ≈ {ob_score:.0f}) → العروض متقدّمة حالياً."
+            )
+
     # 📊 ملخص Coinglass (لو متوفر)
     if coinglass:
         tl = coinglass.get("top_long_pct")
@@ -1622,8 +1646,9 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr2": rr2,
         "rr3": rr3,
         "performance": perf,
-        "arkham_intel": arkham_intel,   # Arkham (placeholder)
-        "coinglass": coinglass,         # Coinglass intel في النتيجة
+        "arkham_intel": arkham_intel,     # Arkham (placeholder)
+        "coinglass": coinglass,           # Coinglass intel في النتيجة
+        "orderbook": orderbook_intel,     # Orderbook intel كامل لو حاب تعرض تفاصيل أكثر
     }
 
     # تسجيل الصفقات الفعلية فقط
@@ -1638,4 +1663,3 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             print("log_trade error:", e)
 
     return result
-

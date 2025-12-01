@@ -115,7 +115,7 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
             liq_short_usd = liq.get("short_liq")
             liq_bias = liq.get("liq_bias", "NEUTRAL")
     except Exception as e:
-    print("Coinglass liquidation error:", e)
+        print("Coinglass liquidation error:", e)
 
     return {
         "top_long_pct": top_long_pct,

@@ -6,6 +6,8 @@ import requests
 import csv
 import os
 from datetime import datetime
+from trades_stats import performance_intel  # ذكاء التعلم من اللوق
+
 
 # =========================
 # إعدادات عامة
@@ -94,6 +96,7 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
 def log_trade(data: Dict[str, Any]):
     """
     يسجل الصفقات الفعلية في ملف CSV اسمه trades_log.csv
+    ويمكن لاحقاً نضيف نتيجة الصفقة (WIN/LOSS) يدويًا في ملف CSV.
     """
     log_file = "trades_log.csv"
     file_exists = os.path.isfile(log_file)
@@ -108,7 +111,7 @@ def log_trade(data: Dict[str, Any]):
                 "grade", "score", "confidence",
                 "pump_risk", "market_regime", "liquidity_bias",
                 "no_trade",
-                "risk_pct", "reward_pct",   # ✅ أضفناهم هنا
+                "result",  # WIN / LOSS (تترك فاضية الآن)
             ])
 
         decision = data.get("decision", {})
@@ -124,13 +127,13 @@ def log_trade(data: Dict[str, Any]):
             decision.get("grade"),
             decision.get("score"),
             decision.get("confidence"),
-            decision.get("pump_dump_risk"),   # هذا يروح في عمود pump_risk
+            decision.get("pump_dump_risk"),
             decision.get("market_regime"),
             decision.get("liquidity_bias"),
             decision.get("no_trade"),
-            data.get("risk_pct"),             # ✅ الآن /stats يقدر يقرأهم
-            data.get("reward_pct"),           # ✅
+            data.get("result", ""),  # تقدر تضيفها لاحقاً لو حبيت
         ])
+
 
 
 
@@ -1157,6 +1160,26 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 3) ندمج الفريمات في قرار واحد + Arkham
     combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
 
+        # 2.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
+    try:
+        perf = performance_intel(symbol_norm, combined)
+    except Exception as _e:
+        perf = {
+            "score_delta": 0.0,
+            "risk_multiplier": 1.0,
+            "force_no_trade": False,
+            "note": None,
+        }
+
+    # نعدل السكور حسب أداء الزوج في الماضي
+    combined["score"] = max(0.0, min(100.0, combined.get("score", 50.0) + perf["score_delta"]))
+
+    # لو الفلتر يقول هذي المنطقة خطرة → نحولها No-Trade
+    if perf.get("force_no_trade"):
+        combined["no_trade"] = True
+        combined["action"] = "WAIT"
+
+
     tp: Optional[float] = None
     sl: Optional[float] = None
     rr: Optional[float] = None
@@ -1174,13 +1197,19 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     if last_close is not None:
         price = float(last_close)
 
-        # نسب المخاطرة حسب الثقة
+        # نسب المخاطرة حسب الثقة (الأساسية)
         if combined["confidence"] == "HIGH":
             risk_pct = 2.0
         elif combined["confidence"] == "MEDIUM":
             risk_pct = 1.5
         else:
             risk_pct = 1.0
+
+        # 🔥 Weapon 3: حجم الصفقة الذكي حسب أداء الزوج
+        risk_pct *= perf.get("risk_multiplier", 1.0)
+        # نضمن إنها ضمن نطاق معقول
+        risk_pct = max(0.5, min(3.0, risk_pct))
+
 
         # مضاعف هدف الربح حسب السكور
         if combined["score"] >= 75:
@@ -1250,6 +1279,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
 
+        if perf.get("note"):
+        reason_lines.append(perf["note"])
+
+
     explanation = " | ".join(reason_lines)
 
     result: Dict[str, Any] = {
@@ -1270,6 +1303,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr1": rr1,
         "rr2": rr2,
         "rr3": rr3,
+        "performance": perf,
         # Arkham intel (حالياً Placeholder)
         "arkham_intel": arkham_intel,
     }

@@ -6,8 +6,8 @@ import requests
 import csv
 import os
 from datetime import datetime
-from analytics import performance_intel
 
+from analytics import performance_intel
 
 
 # =========================
@@ -47,12 +47,12 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
     حالياً ترجع قيم محايدة، لاحقاً نستبدلها بنداءات API الحقيقية.
     """
     return {
-        "whale_inflow_score": 0.0,    # قوة دخول حيتان (0 - 100)
-        "whale_outflow_score": 0.0,   # قوة خروج حيتان (0 - 100)
+        "whale_inflow_score": 0.0,      # قوة دخول حيتان (0 - 100)
+        "whale_outflow_score": 0.0,     # قوة خروج حيتان (0 - 100)
         "smart_money_bias": "NEUTRAL",  # UP / DOWN / NEUTRAL
-        "cex_inflow_score": 0.0,      # عملات داخلة للمنصات (احتمال بيع)
-        "cex_outflow_score": 0.0,     # عملات خارجة من المنصات (احتمال تجميع)
-        "intel_confidence": "LOW",    # LOW / MEDIUM / HIGH
+        "cex_inflow_score": 0.0,        # عملات داخلة للمنصات (احتمال بيع)
+        "cex_outflow_score": 0.0,       # عملات خارجة من المنصات (احتمال تجميع)
+        "intel_confidence": "LOW",      # LOW / MEDIUM / HIGH
     }
 
 
@@ -61,7 +61,10 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
 # =========================
 
 def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.ndarray]:
-    symbol = _normalize_symbol(symbol)
+    """
+    يجلب بيانات الشموع من بايننس.
+    ملاحظة: نفترض أن الـ symbol جاي جاهز (USDT مضاف لو تحتاجه).
+    """
     url = f"{BINANCE_BASE_URL}/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
 
@@ -106,36 +109,38 @@ def log_trade(data: Dict[str, Any]):
         writer = csv.writer(f)
 
         if not file_exists:
-            writer.writerow([
-                "datetime", "symbol", "action", "price",
-                "tp", "sl", "rr",
-                "grade", "score", "confidence",
-                "pump_risk", "market_regime", "liquidity_bias",
-                "no_trade",
-                "result",  # WIN / LOSS (تترك فاضية الآن)
-            ])
+            writer.writerow(
+                [
+                    "datetime", "symbol", "action", "price",
+                    "tp", "sl", "rr",
+                    "grade", "score", "confidence",
+                    "pump_risk", "market_regime", "liquidity_bias",
+                    "no_trade",
+                    "result",  # WIN / LOSS (تترك فاضية الآن)
+                ]
+            )
 
         decision = data.get("decision", {})
 
-        writer.writerow([
-            datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            data.get("symbol"),
-            decision.get("action"),
-            data.get("last_price"),
-            data.get("tp"),
-            data.get("sl"),
-            data.get("rr"),
-            decision.get("grade"),
-            decision.get("score"),
-            decision.get("confidence"),
-            decision.get("pump_dump_risk"),
-            decision.get("market_regime"),
-            decision.get("liquidity_bias"),
-            decision.get("no_trade"),
-            data.get("result", ""),  # تقدر تضيفها لاحقاً لو حبيت
-        ])
-
-
+        writer.writerow(
+            [
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                data.get("symbol"),
+                decision.get("action"),
+                data.get("last_price"),
+                data.get("tp"),
+                data.get("sl"),
+                data.get("rr"),
+                decision.get("grade"),
+                decision.get("score"),
+                decision.get("confidence"),
+                decision.get("pump_dump_risk"),
+                decision.get("market_regime"),
+                decision.get("liquidity_bias"),
+                decision.get("no_trade"),
+                data.get("result", ""),  # تقدر تضيفها لاحقاً لو حبيت
+            ]
+        )
 
 
 # =========================
@@ -156,11 +161,13 @@ def ema(series: np.ndarray, period: int) -> np.ndarray:
 def rsi(series: np.ndarray, period: int = 14) -> np.ndarray:
     if series.size < period + 1:
         raise ValueError("Not enough data for RSI")
+
     deltas = np.diff(series)
     seed = deltas[:period]
     up = seed[seed > 0].sum() / period
     down = -seed[seed < 0].sum() / period
     rs = up / down if down != 0 else 0
+
     rsi_values = np.zeros_like(series)
     rsi_values[:period] = 100.0 - (100.0 / (1.0 + rs))
 
@@ -174,11 +181,16 @@ def rsi(series: np.ndarray, period: int = 14) -> np.ndarray:
         down_ema = (down_ema * (period - 1) + down_vals[i]) / period
         rs = up_ema / down_ema if down_ema != 0 else 0
         rsi_values[i + 1] = 100.0 - (100.0 / (1.0 + rs))
+
     return rsi_values
 
 
-def macd(series: np.ndarray, fast: int = 12, slow: int = 26,
-         signal_period: int = 9) -> Tuple[np.ndarray, np.ndarray]:
+def macd(
+    series: np.ndarray,
+    fast: int = 12,
+    slow: int = 26,
+    signal_period: int = 9,
+) -> Tuple[np.ndarray, np.ndarray]:
     if series.size < slow + signal_period:
         raise ValueError("Not enough data for MACD")
     ema_fast = ema(series, fast)
@@ -188,8 +200,11 @@ def macd(series: np.ndarray, fast: int = 12, slow: int = 26,
     return macd_line, signal_line
 
 
-def bollinger_bands(series: np.ndarray, period: int = 20,
-                    num_std: float = 2.0) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def bollinger_bands(
+    series: np.ndarray,
+    period: int = 20,
+    num_std: float = 2.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     if series.size < period:
         raise ValueError("Not enough data for Bollinger Bands")
     sma = np.convolve(series, np.ones(period) / period, mode="valid")
@@ -207,16 +222,19 @@ def bollinger_bands(series: np.ndarray, period: int = 20,
     return lower, padded_sma, upper
 
 
-def vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-         volume: np.ndarray) -> np.ndarray:
+def vwap(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    volume: np.ndarray,
+) -> np.ndarray:
     typical_price = (high + low + close) / 3.0
     cumulative_vp = np.cumsum(typical_price * volume)
     cumulative_volume = np.cumsum(volume)
     return cumulative_vp / np.maximum(cumulative_volume, 1e-9)
 
 
-def volume_surge(volume: np.ndarray, lookback: int = 20,
-                 threshold: float = 2.0) -> bool:
+def volume_surge(volume: np.ndarray, lookback: int = 20, threshold: float = 2.0) -> bool:
     if volume.size < lookback + 1:
         return False
     recent = volume[-1]
@@ -230,8 +248,12 @@ def price_change(series: np.ndarray, period: int = 1) -> float:
     return (series[-1] - series[-period - 1]) / series[-period - 1] * 100.0
 
 
-def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
-        period: int = 14) -> np.ndarray:
+def atr(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    period: int = 14,
+) -> np.ndarray:
     """
     Average True Range لقياس تذبذب السعر.
     """
@@ -259,8 +281,12 @@ def atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 # Liquidity Map Engine
 # =========================
 
-def _detect_swings(high: np.ndarray, low: np.ndarray,
-                   left: int = 2, right: int = 2) -> Tuple[List[int], List[int]]:
+def _detect_swings(
+    high: np.ndarray,
+    low: np.ndarray,
+    left: int = 2,
+    right: int = 2,
+) -> Tuple[List[int], List[int]]:
     """
     يحدد swing highs و swing lows بسيطة.
     """
@@ -764,7 +790,7 @@ def combine_timeframes(
         return x is not None and not np.isnan(x) and x < 30.0
 
     overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
-    oversold = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
+    oversold = any(_is_oversold(r) for r in [rsi_1h, rsi_4h, rsi_1d])
 
     # =========================
     # تعديل السكور الكلاسيكي
@@ -855,7 +881,7 @@ def combine_timeframes(
     ext_4h = _extended_side("4h")
     ext_1d = _extended_side("1d")
 
-    extended_up   = (ext_4h == "UP") or (ext_1d == "UP")
+    extended_up = (ext_4h == "UP") or (ext_1d == "UP")
     extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
     # فريم مرجعي قوي (Anchor)
@@ -1161,10 +1187,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 3) ندمج الفريمات في قرار واحد + Arkham
     combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
 
-        # 2.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
+    # 2.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:
         perf = performance_intel(symbol_norm, combined)
-    except Exception as _e:
+    except Exception:
         perf = {
             "score_delta": 0.0,
             "risk_multiplier": 1.0,
@@ -1173,13 +1199,14 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         }
 
     # نعدل السكور حسب أداء الزوج في الماضي
-    combined["score"] = max(0.0, min(100.0, combined.get("score", 50.0) + perf["score_delta"]))
+    combined["score"] = max(
+        0.0, min(100.0, combined.get("score", 50.0) + perf["score_delta"])
+    )
 
     # لو الفلتر يقول هذي المنطقة خطرة → نحولها No-Trade
     if perf.get("force_no_trade"):
         combined["no_trade"] = True
         combined["action"] = "WAIT"
-
 
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -1210,7 +1237,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         risk_pct *= perf.get("risk_multiplier", 1.0)
         # نضمن إنها ضمن نطاق معقول
         risk_pct = max(0.5, min(3.0, risk_pct))
-
 
         # مضاعف هدف الربح حسب السكور
         if combined["score"] >= 75:
@@ -1280,9 +1306,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
 
-        if perf.get("note"):
+    if perf.get("note"):
         reason_lines.append(perf["note"])
-
 
     explanation = " | ".join(reason_lines)
 

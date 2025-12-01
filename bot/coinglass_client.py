@@ -3,7 +3,7 @@ import os
 import requests
 from typing import Dict, Any
 
-BASE_URL = "https://open-api.coinglass.com/public/v2"  # تأكد من الـ base من الدوكيومنت الرسمي
+BASE_URL = "https://open-api-v4.coinglass.com"  # تأكد من الـ base من الدوكيومنت الرسمي
 API_KEY = os.getenv("COINGLASS_API_KEY")
 
 

@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from .engine import generate_signal
 from bot.market import get_price
 from bot.scanner import get_top_usdt_symbols
-from bot.analytics import get_trades_summary
+from .analytics import get_trades_summary
 
 # قائمة مراقبة ديناميكية (في الذاكرة)
 WATCHLIST: Set[str] = set(["BTC", "ETH", "SOL", "DOGE", "TON", "BNB"])

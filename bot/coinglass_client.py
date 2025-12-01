@@ -80,18 +80,20 @@ def get_top_long_short_ratio(
 def get_liquidation_intel(
     symbol: str,
     exchange: str = "Binance",
-    interval: str = "4h",
+    window: str = "4h",
 ) -> Dict[str, Any]:
     """
-    يرجّع صورة عن تصفيات LONG و SHORT على العملة.
-    مبني على /api/futures/liquidation/coin-list حسب Docs v4:
-      - ما ياخذ symbol في الـ params، بس exchange
-      - ويرجع ليسـت فيها كل الكوينات، فنفلترها على رمز العملة.
+    يرجّع صورة عن تصفيات LONG و SHORT على العملة من endpoint:
+      /api/futures/liquidation/coin-list
+
+    نختار نافذة زمنية (1h / 4h / 12h / 24h) ونطلع منها حجم التصفيات بالدولار.
     """
 
     path = "/api/futures/liquidation/coin-list"
+
+    # Coinglass يستخدم exName لاسم المنصة (Binance, OKX, Bybit, ...)
     params = {
-        "exchange": exchange,
+        "exName": exchange,
     }
 
     try:
@@ -103,40 +105,41 @@ def get_liquidation_intel(
             "long_liq": None,
             "short_liq": None,
             "liq_bias": "NEUTRAL",
+            "window": window,
         }
 
     items: List[Dict[str, Any]] = data.get("data", []) or []
     if not items:
         return {
             "available": False,
-            "error": "empty data",
+            "error": None,
             "long_liq": None,
             "short_liq": None,
             "liq_bias": "NEUTRAL",
+            "window": window,
         }
 
-    # نطابق الرمز بدون USDT
+    # نبحث عن العملة المطلوبة داخل الليست
     base = symbol.upper().replace("USDT", "")
-    coin = next(
-        (c for c in items if c.get("symbol", "").upper() == base),
-        None,
-    )
+    coin = None
+    for c in items:
+        code = str(c.get("symbol") or c.get("baseAsset") or "").upper()
+        if code == base:
+            coin = c
+            break
 
-    if not coin:
-        return {
-            "available": False,
-            "error": f"symbol {base} not found in coin-list",
-            "long_liq": None,
-            "short_liq": None,
-            "liq_bias": "NEUTRAL",
-        }
+    # لو ما لقيناها نستخدم أول عنصر كـ fallback (بس غالباً بنلاقيها)
+    if coin is None:
+        coin = items[0]
 
-    # نختار الحقول حسب الـ interval
-    suffix_map = {"1h": "1h", "4h": "4h", "12h": "12h", "24h": "24h"}
-    suffix = suffix_map.get(interval, "4h")
-
-    long_key = f"long_liquidation_usd_{suffix}"
-    short_key = f"short_liquidation_usd_{suffix}"
+    # نختار الحقول حسب النافذة الزمنية
+    field_map = {
+        "1h": ("long_liquidation_usd_1h", "short_liquidation_usd_1h"),
+        "4h": ("long_liquidation_usd_4h", "short_liquidation_usd_4h"),
+        "12h": ("long_liquidation_usd_12h", "short_liquidation_usd_12h"),
+        "24h": ("long_liquidation_usd_24h", "short_liquidation_usd_24h"),
+    }
+    long_key, short_key = field_map.get(window, field_map["4h"])
 
     long_liq = float(coin.get(long_key, 0.0) or 0.0)
     short_liq = float(coin.get(short_key, 0.0) or 0.0)
@@ -144,9 +147,9 @@ def get_liquidation_intel(
     if long_liq + short_liq <= 0:
         liq_bias = "NEUTRAL"
     elif long_liq > short_liq * 1.2:
-        liq_bias = "LONG_FLUSH_SOON"
+        liq_bias = "LONG_FLUSH_SOON"      # تصفية لونغات محتملة لو نزل
     elif short_liq > long_liq * 1.2:
-        liq_bias = "SHORT_SQUEEZE_SOON"
+        liq_bias = "SHORT_SQUEEZE_SOON"   # شورت سكويز محتمل لو صعد
     else:
         liq_bias = "BALANCED"
 
@@ -156,4 +159,6 @@ def get_liquidation_intel(
         "long_liq": long_liq,
         "short_liq": short_liq,
         "liq_bias": liq_bias,
+        "window": window,
     }
+

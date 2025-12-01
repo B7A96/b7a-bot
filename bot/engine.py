@@ -93,6 +93,108 @@ def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.n
         "volume": np.array(volumes, dtype=float),
     }
 
+# =========================
+# Orderbook Pressure Engine
+# =========================
+
+def fetch_orderbook(symbol: str, limit: int = 100) -> Dict[str, Any]:
+    """
+    يجلب دفتر الأوامر (Orderbook) من Binance.
+    نستخدمه لقياس ضغط الشراء/البيع (BID/ASK Pressure).
+    """
+    symbol = _normalize_symbol(symbol)
+    url = f"{BINANCE_BASE_URL}/api/v3/depth"
+    params = {"symbol": symbol, "limit": limit}
+
+    resp = requests.get(url, params=params, timeout=10)
+    if resp.status_code != 200:
+        raise MarketDataError(f"Binance orderbook error {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    bids_raw = data.get("bids", [])
+    asks_raw = data.get("asks", [])
+
+    # كل عنصر: [price, qty]
+    bids = [(float(p), float(q)) for p, q in bids_raw]
+    asks = [(float(p), float(q)) for p, q in asks_raw]
+
+    return {"bids": bids, "asks": asks}
+
+
+def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
+    """
+    يحلل دفتر الأوامر ويحسب:
+    - bias: BID / ASK / FLAT
+    - score: قوة الانحياز (0 - 100)
+    - bid/ask walls: مستويات سيولة قوية قريبة من السعر
+    """
+    ob = fetch_orderbook(symbol_norm, limit=limit)
+    bids = ob["bids"]
+    asks = ob["asks"]
+
+    if not bids or not asks:
+        return {
+            "bias": "FLAT",
+            "score": 0.0,
+            "total_bid": 0.0,
+            "total_ask": 0.0,
+            "bid_walls": [],
+            "ask_walls": [],
+        }
+
+    # نستخدم الكميات (qty) لقياس الضغط
+    total_bid = sum(q for _, q in bids)
+    total_ask = sum(q for _, q in asks)
+
+    if total_bid + total_ask <= 0:
+        return {
+            "bias": "FLAT",
+            "score": 0.0,
+            "total_bid": float(total_bid),
+            "total_ask": float(total_ask),
+            "bid_walls": [],
+            "ask_walls": [],
+        }
+
+    # Imbalance بين جانب المشترين والبائعين
+    imbalance = (total_bid - total_ask) / (total_bid + total_ask)
+
+    if imbalance > 0.15:
+        bias = "BID"
+    elif imbalance < -0.15:
+        bias = "ASK"
+    else:
+        bias = "FLAT"
+
+    score = max(0.0, min(100.0, abs(imbalance) * 100.0))
+
+    # نحدد "جدران" السيولة (Walls) – مستويات كميتها كبيرة جداً نسبياً
+    bid_walls = []
+    ask_walls = []
+    if total_bid > 0:
+        bid_threshold = 0.03 * total_bid  # أي مستوى > 3% من إجمالي جانب الـ Bids
+        for price, qty in bids:
+            if qty >= bid_threshold:
+                bid_walls.append({"price": price, "qty": qty})
+
+    if total_ask > 0:
+        ask_threshold = 0.03 * total_ask
+        for price, qty in asks:
+            if qty >= ask_threshold:
+                ask_walls.append({"price": price, "qty": qty})
+
+    # نرتبهم من الأكبر للأصغر ونأخذ أهم 5 فقط
+    bid_walls = sorted(bid_walls, key=lambda x: x["qty"], reverse=True)[:5]
+    ask_walls = sorted(ask_walls, key=lambda x: x["qty"], reverse=True)[:5]
+
+    return {
+        "bias": bias,
+        "score": float(score),
+        "total_bid": float(total_bid),
+        "total_ask": float(total_ask),
+        "bid_walls": bid_walls,
+        "ask_walls": ask_walls,
+    }
 
 # =========================
 # Trade Logger
@@ -664,11 +766,13 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 def combine_timeframes(
     tf_data: Dict[str, Dict[str, Any]],
     arkham_intel: Optional[Dict[str, Any]] = None,
+    orderbook_intel: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع:
     - فلتر حماية من الشراء في القمم والبيع في القيعان
-    - إضافة ذكية من Arkham Smart Money (لو موجودة).
+    - إضافة ذكية من Arkham Smart Money (لو موجودة)
+    - Orderbook Pressure من Binance (ضغط أوامر الشراء/البيع).
     """
     weights = {
         "15m": 0.2,
@@ -791,7 +895,7 @@ def combine_timeframes(
         return x is not None and not np.isnan(x) and x < 30.0
 
     overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
-    oversold = any(_is_oversold(r) for r in [rsi_1h, rsi_4h, rsi_1d])
+    oversold = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
 
     # =========================
     # تعديل السكور الكلاسيكي
@@ -857,7 +961,37 @@ def combine_timeframes(
 
             combined_score += delta
         except Exception:
-            # أي مشكلة في البيانات نتجاهل Arkham نهائياً
+            pass
+
+    # =========================
+    # Orderbook Pressure Boost
+    # =========================
+    orderbook_bias = "FLAT"
+    orderbook_score = 0.0
+    if orderbook_intel:
+        try:
+            orderbook_bias = orderbook_intel.get("bias", "FLAT")
+            orderbook_score = float(orderbook_intel.get("score", 0.0) or 0.0)
+            ob_intensity = min(orderbook_score / 100.0, 1.0)
+
+            delta = 0.0
+            if orderbook_bias == "BID":
+                if global_trend == "BULLISH":
+                    # ضغط مشترين مع الترند → دعم قوي
+                    delta += 4.0 * ob_intensity
+                elif global_trend == "BEARISH":
+                    # ضغط مشترين ضد الترند → تقليل السلبية شوي
+                    delta += 2.0 * ob_intensity
+            elif orderbook_bias == "ASK":
+                if global_trend == "BEARISH":
+                    # ضغط بائعين مع الترند → دعم للهبوط
+                    delta -= 4.0 * ob_intensity
+                elif global_trend == "BULLISH":
+                    # ضغط بائعين ضد الترند → نكون حذرين من الشراء
+                    delta -= 2.0 * ob_intensity
+
+            combined_score += delta
+        except Exception:
             pass
 
     combined_score = max(0.0, min(100.0, combined_score))
@@ -882,7 +1016,7 @@ def combine_timeframes(
     ext_4h = _extended_side("4h")
     ext_1d = _extended_side("1d")
 
-    extended_up = (ext_4h == "UP") or (ext_1d == "UP")
+    extended_up   = (ext_4h == "UP") or (ext_1d == "UP")
     extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
     # فريم مرجعي قوي (Anchor)
@@ -919,7 +1053,7 @@ def combine_timeframes(
     # =========================
     action = "WAIT"
 
-    # شروط BUY (أخف من قبل بس ما زالت قوية)
+    # شروط BUY
     if (
         combined_score >= 65.0
         and bull_align >= 0.50
@@ -932,7 +1066,7 @@ def combine_timeframes(
     ):
         action = "BUY"
 
-    # شروط SELL (تم تخفيفها أيضاً عشان يطلع لنا صفقات شورت)
+    # شروط SELL
     if (
         combined_score <= 45.0
         and bear_align >= 0.45
@@ -944,7 +1078,7 @@ def combine_timeframes(
     ):
         action = "SELL"
 
-    # المنطقة الرمادية → نستخدم السيولة + الاختراقات
+    # المنطقة الرمادية
     if action == "WAIT" and 50.0 <= combined_score < 65.0 and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
@@ -979,7 +1113,7 @@ def combine_timeframes(
         action = "WAIT"
 
     # =========================
-    # Grade + No-Trade (Balanced)
+    # Grade + No-Trade
     # =========================
     if (
         combined_score >= 78
@@ -1002,15 +1136,12 @@ def combine_timeframes(
 
     no_trade = False
 
-    # منطقة محظورة لو الإشارة ضعيفة فعلاً
     if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
         no_trade = True
 
-    # لو مافي قرار واضح → No-Trade
     if action == "WAIT":
         no_trade = True
 
-    # لو السيولة متعادلة تقريباً جداً → نخليها No-Trade (فلتر حماية)
     if liquidity_score < 5:
         no_trade = True
 
@@ -1030,7 +1161,11 @@ def combine_timeframes(
         "bear_align": round(float(bear_align), 2),
         "safety_block_buy": bool(safety_block_buy),
         "safety_block_sell": bool(safety_block_sell),
+        # Orderbook info
+        "orderbook_bias": orderbook_bias,
+        "orderbook_score": round(float(orderbook_score), 2),
     }
+
 
 
 # =========================
@@ -1156,22 +1291,17 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) نحاول جلب Arkham Intel (لو متوفر مستقبلاً)
+    # 1) Arkham Intel (لو متوفر مستقبلاً)
     try:
         arkham_intel = get_arkham_intel(symbol_norm)
     except Exception:
         arkham_intel = None
 
-    # 1.5) Coinglass Intel (Top Traders + Liquidations)
+    # 1.5) Orderbook Pressure Intel
     try:
-        cg_ls = get_top_long_short_ratio(symbol_norm, exchange="Binance", interval="4h", limit=1)
-    except Exception as e:
-        cg_ls = {"available": False, "error": str(e)}
-
-    try:
-        cg_liq = get_liquidation_intel(symbol_norm, exchange="Binance", interval="4h")
-    except Exception as e:
-        cg_liq = {"available": False, "error": str(e)}
+        orderbook_intel = analyse_orderbook(symbol_norm, limit=100)
+    except Exception:
+        orderbook_intel = None
 
     # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
@@ -1196,8 +1326,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 3) ندمج الفريمات في قرار واحد + Arkham
-    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
+    # 3) ندمج الفريمات في قرار واحد + Arkham + Orderbook
+    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel, orderbook_intel=orderbook_intel)
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:
@@ -1247,7 +1377,6 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
         # حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
-        # نضمن إنها ضمن نطاق معقول
         risk_pct = max(0.5, min(3.0, risk_pct))
 
         # مضاعف هدف الربح حسب السكور
@@ -1313,38 +1442,23 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
         )
 
+    # Orderbook explanation
+    if orderbook_intel:
+        ob_bias = orderbook_intel.get("bias", "FLAT")
+        ob_score = float(orderbook_intel.get("score", 0.0) or 0.0)
+        if ob_bias == "BID":
+            reason_lines.append(
+                f"ضغط المشترين في دفتر الأوامر (Orderbook BID) ملحوظ (Score ≈ {ob_score:.0f}) → الطلب متقدّم حالياً."
+            )
+        elif ob_bias == "ASK":
+            reason_lines.append(
+                f"ضغط البائعين في دفتر الأوامر (Orderbook ASK) ملحوظ (Score ≈ {ob_score:.0f}) → العروض متقدّمة حالياً."
+            )
+
     if combined["pump_dump_risk"] != "LOW":
         reason_lines.append(
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
-
-    # 🧠 إضافة توضيح Coinglass في الرسالة (بدون تغيير المنطق حالياً)
-    cg_notes: List[str] = []
-
-    if cg_ls.get("available"):
-        try:
-            top_long = cg_ls.get("top_long_pct") or 0.0
-            top_short = cg_ls.get("top_short_pct") or 0.0
-            ratio = cg_ls.get("top_long_short_ratio") or 0.0
-            cg_notes.append(
-                f"Top Traders Long/Short ≈ {top_long:.1f}% / {top_short:.1f}% (Ratio ≈ {ratio:.2f})"
-            )
-        except Exception:
-            pass
-
-    if cg_liq.get("available"):
-        try:
-            long_liq = cg_liq.get("long_liq") or 0.0
-            short_liq = cg_liq.get("short_liq") or 0.0
-            liq_bias_cg = cg_liq.get("liq_bias", "NEUTRAL")
-            cg_notes.append(
-                f"Liquidations L/S ≈ {long_liq:.0f} / {short_liq:.0f} – Bias: {liq_bias_cg}"
-            )
-        except Exception:
-            pass
-
-    if cg_notes:
-        reason_lines.append("📊 Coinglass Intel → " + " | ".join(cg_notes))
 
     if perf.get("note"):
         reason_lines.append(perf["note"])
@@ -1372,9 +1486,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "performance": perf,
         # Arkham intel (حالياً Placeholder)
         "arkham_intel": arkham_intel,
-        # Coinglass intel الخام
-        "coinglass_long_short": cg_ls,
-        "coinglass_liquidation": cg_liq,
+        # Orderbook intel
+        "orderbook_intel": orderbook_intel,
     }
 
     # تسجيل الصفقات الفعلية فقط

@@ -56,6 +56,135 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
         "intel_confidence": "LOW",      # LOW / MEDIUM / HIGH
     }
 
+# =========================
+# Coinglass Intel (قابل للتطوير حسب الـ API الحقيقي)
+# =========================
+
+def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
+    """
+    ذكاء Coinglass الخارجي.
+    حالياً:
+      - يقرأ مفتاح API من المتغير COINGLASS_API_KEY
+      - يدعم عناوين مخصّصة عبر:
+          COINGLASS_TOPTRADERS_URL
+          COINGLASS_LIQUIDATIONS_URL
+    لو ما كانت مضبوطة أو صار خطأ → يرجّع قيم محايدة وما يوقف البوت.
+    """
+    api_key = os.getenv("COINGLASS_API_KEY")
+    if not api_key:
+        # ما في API → نرجع قيم محايدة
+        return {
+            "top_long_pct": None,
+            "top_short_pct": None,
+            "top_ratio": None,
+            "top_bias": "NEUTRAL",
+            "liq_long_usd": None,
+            "liq_short_usd": None,
+            "liq_bias": "NEUTRAL",
+        }
+
+    headers = {
+        "Accept": "application/json",
+        "CG-API-KEY": api_key,
+    }
+
+    symbol_no_usdt = symbol.replace("USDT", "").upper()
+
+    top_url = os.getenv("COINGLASS_TOPTRADERS_URL", "").strip()
+    liq_url = os.getenv("COINGLASS_LIQUIDATIONS_URL", "").strip()
+
+    top_long_pct = top_short_pct = top_ratio = None
+    top_bias = "NEUTRAL"
+    liq_long_usd = liq_short_usd = None
+    liq_bias = "NEUTRAL"
+
+    # ---- Top Traders Long/Short (اختياري) ----
+    if top_url:
+        try:
+            resp = requests.get(
+                top_url,
+                params={"symbol": symbol_no_usdt},
+                headers=headers,
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # ✅ عدّل حسب شكل استجابة Coinglass الحقيقية
+                item = None
+                if isinstance(data, dict):
+                    item = data.get("data") or data
+                elif isinstance(data, list) and data:
+                    item = data[-1]
+
+                if isinstance(item, dict):
+                    long_v = item.get("longRatio") or item.get("long") or item.get("topLongRatio")
+                    short_v = item.get("shortRatio") or item.get("short") or item.get("topShortRatio")
+                    try:
+                        if long_v is not None:
+                            top_long_pct = float(long_v)
+                        if short_v is not None:
+                            top_short_pct = float(short_v)
+                        if top_long_pct is not None and top_short_pct is not None and top_short_pct > 0:
+                            top_ratio = top_long_pct / top_short_pct
+                            if top_ratio > 1.2:
+                                top_bias = "LONG"
+                            elif top_ratio < 0.8:
+                                top_bias = "SHORT"
+                            else:
+                                top_bias = "NEUTRAL"
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # ---- Liquidations (اختياري) ----
+    if liq_url:
+        try:
+            resp = requests.get(
+                liq_url,
+                params={"symbol": symbol_no_usdt},
+                headers=headers,
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                # ✅ عدّل حسب استجابة Coinglass الحقيقية
+                item = None
+                if isinstance(data, dict):
+                    item = data.get("data") or data
+                elif isinstance(data, list) and data:
+                    item = data[-1]
+
+                if isinstance(item, dict):
+                    long_liq = item.get("longLiquidation") or item.get("longLiq")
+                    short_liq = item.get("shortLiquidation") or item.get("shortLiq")
+                    try:
+                        if long_liq is not None:
+                            liq_long_usd = float(long_liq)
+                        if short_liq is not None:
+                            liq_short_usd = float(short_liq)
+
+                        if liq_long_usd is not None and liq_short_usd is not None:
+                            if liq_long_usd > liq_short_usd * 1.3:
+                                liq_bias = "LONG_WASHOUT"
+                            elif liq_short_usd > liq_long_usd * 1.3:
+                                liq_bias = "SHORT_WASHOUT"
+                            else:
+                                liq_bias = "NEUTRAL"
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    return {
+        "top_long_pct": top_long_pct,
+        "top_short_pct": top_short_pct,
+        "top_ratio": top_ratio,
+        "top_bias": top_bias,
+        "liq_long_usd": liq_long_usd,
+        "liq_short_usd": liq_short_usd,
+        "liq_bias": liq_bias,
+    }
 
 # =========================
 # جلب البيانات من Binance
@@ -1291,17 +1420,17 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) Arkham Intel (لو متوفر مستقبلاً)
+    # 1) نحاول جلب Arkham Intel (لو متوفر مستقبلاً)
     try:
         arkham_intel = get_arkham_intel(symbol_norm)
     except Exception:
         arkham_intel = None
 
-    # 1.5) Orderbook Pressure Intel
+    # 1.5) نحاول جلب Coinglass Intel (لو متوفر)
     try:
-        orderbook_intel = analyse_orderbook(symbol_norm, limit=100)
+        coinglass = get_coinglass_intel(symbol_norm)
     except Exception:
-        orderbook_intel = None
+        coinglass = None
 
     # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
@@ -1326,8 +1455,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 3) ندمج الفريمات في قرار واحد + Arkham + Orderbook
-    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel, orderbook_intel=orderbook_intel)
+    # 3) ندمج الفريمات في قرار واحد + Arkham
+    combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:
@@ -1375,8 +1504,9 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
-        # حجم الصفقة الذكي حسب أداء الزوج
+        # 🔥 Weapon 3: حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
+        # نضمن إنها ضمن نطاق معقول
         risk_pct = max(0.5, min(3.0, risk_pct))
 
         # مضاعف هدف الربح حسب السكور
@@ -1442,23 +1572,31 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
         )
 
-    # Orderbook explanation
-    if orderbook_intel:
-        ob_bias = orderbook_intel.get("bias", "FLAT")
-        ob_score = float(orderbook_intel.get("score", 0.0) or 0.0)
-        if ob_bias == "BID":
-            reason_lines.append(
-                f"ضغط المشترين في دفتر الأوامر (Orderbook BID) ملحوظ (Score ≈ {ob_score:.0f}) → الطلب متقدّم حالياً."
-            )
-        elif ob_bias == "ASK":
-            reason_lines.append(
-                f"ضغط البائعين في دفتر الأوامر (Orderbook ASK) ملحوظ (Score ≈ {ob_score:.0f}) → العروض متقدّمة حالياً."
-            )
-
     if combined["pump_dump_risk"] != "LOW":
         reason_lines.append(
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
+
+    # 📊 ملخص Coinglass (لو متوفر)
+    if coinglass:
+        tl = coinglass.get("top_long_pct")
+        ts = coinglass.get("top_short_pct")
+        tr = coinglass.get("top_ratio")
+        liq_l = coinglass.get("liq_long_usd")
+        liq_s = coinglass.get("liq_short_usd")
+        top_bias = coinglass.get("top_bias", "NEUTRAL")
+        liq_b = coinglass.get("liq_bias", "NEUTRAL")
+
+        parts = []
+        if tl is not None and ts is not None:
+            parts.append(f"Top Traders Long/Short ≈ {tl:.1f}% / {ts:.1f}%")
+            if tr:
+                parts.append(f"Ratio ≈ {tr:.2f} (Bias: {top_bias})")
+        if liq_l is not None and liq_s is not None:
+            parts.append(f"Liquidations L/S ≈ {liq_l:.0f} / {liq_s:.0f} USD – Bias: {liq_b}")
+
+        if parts:
+            reason_lines.append("📊 Coinglass Intel → " + " | ".join(parts))
 
     if perf.get("note"):
         reason_lines.append(perf["note"])
@@ -1484,10 +1622,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr2": rr2,
         "rr3": rr3,
         "performance": perf,
-        # Arkham intel (حالياً Placeholder)
-        "arkham_intel": arkham_intel,
-        # Orderbook intel
-        "orderbook_intel": orderbook_intel,
+        "arkham_intel": arkham_intel,   # Arkham (placeholder)
+        "coinglass": coinglass,         # Coinglass intel في النتيجة
     }
 
     # تسجيل الصفقات الفعلية فقط
@@ -1502,3 +1638,4 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             print("log_trade error:", e)
 
     return result
+

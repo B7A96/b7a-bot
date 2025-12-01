@@ -1,6 +1,8 @@
 import os
+import time
 import requests
 from typing import Dict, Any, Optional, List
+
 
 COINGLASS_BASE_URL = "https://open-api-v4.coinglass.com"
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY")
@@ -31,6 +33,18 @@ def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     return data
 
 
+# ======================
+# Simple Cache + Flags
+# ======================
+_TOP_CACHE: Dict[tuple, tuple] = {}       # key -> (ts, result)
+_TOP_CACHE_TTL = 300                      # 5 دقائق
+
+_LIQ_CACHE: Dict[str, tuple] = {}         # symbol -> (ts, result)
+_LIQ_CACHE_TTL = 180                      # 3 دقائق
+
+_LIQ_SUPPORTED = True                     # لو طلع "Not Supported" نعطله نهائياً
+
+
 # ================================
 # 1) Top Long/Short Position Ratio
 # ================================
@@ -44,8 +58,19 @@ def get_top_long_short_ratio(
 ) -> Dict[str, Any]:
     """
     يرجّع آخر قيمة لـ Long/Short Ratio للـ top traders.
-    يستخدمها البوت ليفهم منو متغلب: اللونغ ولا الشورت.
+    الآن فيه:
+      - Caching 5 دقائق على مستوى (symbol, exchange, interval)
+      - حماية بسيطة من Too Many Requests
     """
+    key = (symbol.upper(), exchange, interval)
+    now = time.time()
+
+    # 1) إذا عندنا كاش جديد → رجّعه مباشرة
+    if key in _TOP_CACHE:
+        ts, cached = _TOP_CACHE[key]
+        if now - ts < _TOP_CACHE_TTL:
+            return cached
+
     path = "/api/futures/top-long-short-position-ratio/history"
     params = {
         "symbol": symbol.upper(),
@@ -53,23 +78,41 @@ def get_top_long_short_ratio(
         "interval": interval,
         "limit": limit,
     }
-    data = _get(path, params=params)
-    items: List[Dict[str, Any]] = data.get("data", []) or []
-    if not items:
-        return {
+
+    try:
+        data = _get(path, params=params)
+        items: List[Dict[str, Any]] = data.get("data", []) or []
+        if not items:
+            result = {
+                "available": False,
+                "top_long_pct": None,
+                "top_short_pct": None,
+                "top_long_short_ratio": None,
+            }
+        else:
+            last = items[-1]
+            result = {
+                "available": True,
+                "top_long_pct": float(last.get("top_position_long_percent", 0.0)),
+                "top_short_pct": float(last.get("top_position_short_percent", 0.0)),
+                "top_long_short_ratio": float(
+                    last.get("top_position_long_short_ratio", 0.0)
+                ),
+            }
+
+    except CoinglassError as e:
+        # لو Too Many Requests أو أي خطأ → نرجّع نتيجة محايدة
+        print("Coinglass top ratio error:", e)
+        result = {
             "available": False,
             "top_long_pct": None,
             "top_short_pct": None,
             "top_long_short_ratio": None,
         }
 
-    last = items[-1]
-    return {
-        "available": True,
-        "top_long_pct": float(last.get("top_position_long_percent", 0.0)),
-        "top_short_pct": float(last.get("top_position_short_percent", 0.0)),
-        "top_long_short_ratio": float(last.get("top_position_long_short_ratio", 0.0)),
-    }
+    _TOP_CACHE[key] = (now, result)
+    return result
+
 
 
 # ================================
@@ -79,86 +122,98 @@ def get_top_long_short_ratio(
 
 def get_liquidation_intel(
     symbol: str,
-    exchange: str = "Binance",
-    window: str = "4h",
+    interval: str = "4h",
+    window: int = 24,
 ) -> Dict[str, Any]:
     """
-    يرجّع صورة عن تصفيات LONG و SHORT على العملة من endpoint:
-      /api/futures/liquidation/coin-list
-
-    نختار نافذة زمنية (1h / 4h / 12h / 24h) ونطلع منها حجم التصفيات بالدولار.
+    Liquidation Intel مبسّط مع مراعاة:
+      - بعض الخطط (مثل Hobbyist) ما تدعم هالـ endpoint → "Not Supported"
+      - نستخدم Cache عشان ما نكرر الطلب.
+    لو الخطة ما تدعم → يرجّع available=False دائماً بدون ما يزعج Coinglass.
     """
+    global _LIQ_SUPPORTED
 
-    path = "/api/futures/liquidation/coin-list"
+    # لو عرفنا من قبل إنه غير مدعوم → رجّع محايد على طول
+    if not _LIQ_SUPPORTED:
+        return {
+            "available": False,
+            "error": "Not supported on current Coinglass plan",
+            "long_liq": None,
+            "short_liq": None,
+            "liq_bias": "NEUTRAL",
+        }
 
-    # Coinglass يستخدم exName لاسم المنصة (Binance, OKX, Bybit, ...)
+    symbol_u = symbol.upper()
+    now = time.time()
+
+    # كاش لكل رمز
+    if symbol_u in _LIQ_CACHE:
+        ts, cached = _LIQ_CACHE[symbol_u]
+        if now - ts < _LIQ_CACHE_TTL:
+            return cached
+
+    path = "/api/futures/liquidation/aggregated-history"
     params = {
-        "exName": exchange,
+        "symbol": symbol_u,
+        "interval": interval,   # مثل "4h"
+        "window": window,       # مثلاً 24 ساعة
     }
 
     try:
         data = _get(path, params=params)
     except CoinglassError as e:
-        return {
+        msg = str(e)
+        print("Coinglass liquidation error:", msg)
+
+        # لو الخطة ما تدعم أو رجّع Not Supported → عطّل الـ endpoint نهائياً
+        if "Not Supported" in msg or "Account level" in msg:
+            _LIQ_SUPPORTED = False
+
+        result = {
             "available": False,
-            "error": str(e),
+            "error": msg,
             "long_liq": None,
             "short_liq": None,
             "liq_bias": "NEUTRAL",
-            "window": window,
         }
+        _LIQ_CACHE[symbol_u] = (now, result)
+        return result
 
     items: List[Dict[str, Any]] = data.get("data", []) or []
     if not items:
-        return {
+        result = {
             "available": False,
             "error": None,
             "long_liq": None,
             "short_liq": None,
             "liq_bias": "NEUTRAL",
-            "window": window,
         }
+        _LIQ_CACHE[symbol_u] = (now, result)
+        return result
 
-    # نبحث عن العملة المطلوبة داخل الليست
-    base = symbol.upper().replace("USDT", "")
-    coin = None
-    for c in items:
-        code = str(c.get("symbol") or c.get("baseAsset") or "").upper()
-        if code == base:
-            coin = c
-            break
+    long_liq_total = 0.0
+    short_liq_total = 0.0
 
-    # لو ما لقيناها نستخدم أول عنصر كـ fallback (بس غالباً بنلاقيها)
-    if coin is None:
-        coin = items[0]
+    for it in items:
+        long_liq_total += float(it.get("longVolUsd", 0.0))
+        short_liq_total += float(it.get("shortVolUsd", 0.0))
 
-    # نختار الحقول حسب النافذة الزمنية
-    field_map = {
-        "1h": ("long_liquidation_usd_1h", "short_liquidation_usd_1h"),
-        "4h": ("long_liquidation_usd_4h", "short_liquidation_usd_4h"),
-        "12h": ("long_liquidation_usd_12h", "short_liquidation_usd_12h"),
-        "24h": ("long_liquidation_usd_24h", "short_liquidation_usd_24h"),
-    }
-    long_key, short_key = field_map.get(window, field_map["4h"])
-
-    long_liq = float(coin.get(long_key, 0.0) or 0.0)
-    short_liq = float(coin.get(short_key, 0.0) or 0.0)
-
-    if long_liq + short_liq <= 0:
+    if long_liq_total + short_liq_total <= 0:
         liq_bias = "NEUTRAL"
-    elif long_liq > short_liq * 1.2:
-        liq_bias = "LONG_FLUSH_SOON"      # تصفية لونغات محتملة لو نزل
-    elif short_liq > long_liq * 1.2:
-        liq_bias = "SHORT_SQUEEZE_SOON"   # شورت سكويز محتمل لو صعد
+    elif long_liq_total > short_liq_total * 1.2:
+        liq_bias = "LONG_FLUSH_SOON"
+    elif short_liq_total > long_liq_total * 1.2:
+        liq_bias = "SHORT_SQUEEZE_SOON"
     else:
         liq_bias = "BALANCED"
 
-    return {
+    result = {
         "available": True,
         "error": None,
-        "long_liq": long_liq,
-        "short_liq": short_liq,
+        "long_liq": long_liq_total,
+        "short_liq": short_liq_total,
         "liq_bias": liq_bias,
-        "window": window,
     }
 
+    _LIQ_CACHE[symbol_u] = (now, result)
+    return result

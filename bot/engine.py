@@ -7,6 +7,7 @@ import csv
 import os
 from datetime import datetime
 
+from .coinglass_client import get_top_long_short_ratio, get_liquidation_intel
 from .analytics import performance_intel
 
 
@@ -1161,6 +1162,17 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     except Exception:
         arkham_intel = None
 
+    # 1.5) Coinglass Intel (Top Traders + Liquidations)
+    try:
+        cg_ls = get_top_long_short_ratio(symbol_norm, exchange="Binance", interval="4h", limit=1)
+    except Exception as e:
+        cg_ls = {"available": False, "error": str(e)}
+
+    try:
+        cg_liq = get_liquidation_intel(symbol_norm, exchange="Binance", interval="4h")
+    except Exception as e:
+        cg_liq = {"available": False, "error": str(e)}
+
     # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
@@ -1187,7 +1199,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # 3) ندمج الفريمات في قرار واحد + Arkham
     combined = combine_timeframes(tf_results, arkham_intel=arkham_intel)
 
-    # 2.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
+    # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:
         perf = performance_intel(symbol_norm, combined)
     except Exception:
@@ -1233,7 +1245,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
-        # 🔥 Weapon 3: حجم الصفقة الذكي حسب أداء الزوج
+        # حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
         # نضمن إنها ضمن نطاق معقول
         risk_pct = max(0.5, min(3.0, risk_pct))
@@ -1306,6 +1318,34 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
         )
 
+    # 🧠 إضافة توضيح Coinglass في الرسالة (بدون تغيير المنطق حالياً)
+    cg_notes: List[str] = []
+
+    if cg_ls.get("available"):
+        try:
+            top_long = cg_ls.get("top_long_pct") or 0.0
+            top_short = cg_ls.get("top_short_pct") or 0.0
+            ratio = cg_ls.get("top_long_short_ratio") or 0.0
+            cg_notes.append(
+                f"Top Traders Long/Short ≈ {top_long:.1f}% / {top_short:.1f}% (Ratio ≈ {ratio:.2f})"
+            )
+        except Exception:
+            pass
+
+    if cg_liq.get("available"):
+        try:
+            long_liq = cg_liq.get("long_liq") or 0.0
+            short_liq = cg_liq.get("short_liq") or 0.0
+            liq_bias_cg = cg_liq.get("liq_bias", "NEUTRAL")
+            cg_notes.append(
+                f"Liquidations L/S ≈ {long_liq:.0f} / {short_liq:.0f} – Bias: {liq_bias_cg}"
+            )
+        except Exception:
+            pass
+
+    if cg_notes:
+        reason_lines.append("📊 Coinglass Intel → " + " | ".join(cg_notes))
+
     if perf.get("note"):
         reason_lines.append(perf["note"])
 
@@ -1332,6 +1372,9 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "performance": perf,
         # Arkham intel (حالياً Placeholder)
         "arkham_intel": arkham_intel,
+        # Coinglass intel الخام
+        "coinglass_long_short": cg_ls,
+        "coinglass_liquidation": cg_liq,
     }
 
     # تسجيل الصفقات الفعلية فقط

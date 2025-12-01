@@ -6,7 +6,8 @@ import requests
 import csv
 import os
 from datetime import datetime
-from trades_stats import performance_intel  # ذكاء التعلم من اللوق
+from analytics import performance_intel
+
 
 
 # =========================

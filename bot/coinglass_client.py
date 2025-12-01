@@ -84,19 +84,19 @@ def get_liquidation_intel(
 ) -> Dict[str, Any]:
     """
     يرجّع صورة عن تصفيات LONG و SHORT على العملة.
-    نستخدمها كتحذير إذا في موجة تصفية قوية على طرف معيّن.
-    ملاحظة: تحتاج plan يدعم هالـ endpoint (مو كل الخطط).
+    مبني على /api/futures/liquidation/coin-list حسب Docs v4:
+      - ما ياخذ symbol في الـ params، بس exchange
+      - ويرجع ليسـت فيها كل الكوينات، فنفلترها على رمز العملة.
     """
+
     path = "/api/futures/liquidation/coin-list"
     params = {
-        "symbol": symbol.upper(),
         "exchange": exchange,
-        "interval": interval,
     }
+
     try:
         data = _get(path, params=params)
     except CoinglassError as e:
-        # لو خطتك ما تدعم أو في خطأ، نرجع بيانات محايدة عشان ما نكسر البوت
         return {
             "available": False,
             "error": str(e),
@@ -109,24 +109,44 @@ def get_liquidation_intel(
     if not items:
         return {
             "available": False,
-            "error": None,
+            "error": "empty data",
             "long_liq": None,
             "short_liq": None,
             "liq_bias": "NEUTRAL",
         }
 
-    # نفترض أول عنصر هو العملة المطلوبة
-    coin = items[0]
+    # نطابق الرمز بدون USDT
+    base = symbol.upper().replace("USDT", "")
+    coin = next(
+        (c for c in items if c.get("symbol", "").upper() == base),
+        None,
+    )
 
-    long_liq = float(coin.get("long_liq_value", 0.0)) if "long_liq_value" in coin else 0.0
-    short_liq = float(coin.get("short_liq_value", 0.0)) if "short_liq_value" in coin else 0.0
+    if not coin:
+        return {
+            "available": False,
+            "error": f"symbol {base} not found in coin-list",
+            "long_liq": None,
+            "short_liq": None,
+            "liq_bias": "NEUTRAL",
+        }
+
+    # نختار الحقول حسب الـ interval
+    suffix_map = {"1h": "1h", "4h": "4h", "12h": "12h", "24h": "24h"}
+    suffix = suffix_map.get(interval, "4h")
+
+    long_key = f"long_liquidation_usd_{suffix}"
+    short_key = f"short_liquidation_usd_{suffix}"
+
+    long_liq = float(coin.get(long_key, 0.0) or 0.0)
+    short_liq = float(coin.get(short_key, 0.0) or 0.0)
 
     if long_liq + short_liq <= 0:
         liq_bias = "NEUTRAL"
     elif long_liq > short_liq * 1.2:
-        liq_bias = "LONG_FLUSH_SOON"   # احتمال تصفية لونغات إذا نزل
+        liq_bias = "LONG_FLUSH_SOON"
     elif short_liq > long_liq * 1.2:
-        liq_bias = "SHORT_SQUEEZE_SOON"  # احتمال شورت سكويز إذا صعد
+        liq_bias = "SHORT_SQUEEZE_SOON"
     else:
         liq_bias = "BALANCED"
 

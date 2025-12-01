@@ -63,117 +63,59 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
 
 def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
     """
-    ذكاء Coinglass الخارجي.
-    حالياً:
-      - يقرأ مفتاح API من المتغير COINGLASS_API_KEY
-      - يدعم عناوين مخصّصة عبر:
-          COINGLASS_TOPTRADERS_URL
-          COINGLASS_LIQUIDATIONS_URL
-    لو ما كانت مضبوطة أو صار خطأ → يرجّع قيم محايدة وما يوقف البوت.
+    Wrapper فوق coinglass_client:
+    - يستخدم get_top_long_short_ratio
+    - يستخدم get_liquidation_intel
+    ويرجع فورمات موحّد للبوت.
     """
-    api_key = os.getenv("COINGLASS_API_KEY")
-    if not api_key:
-        # ما في API → نرجع قيم محايدة
-        return {
-            "top_long_pct": None,
-            "top_short_pct": None,
-            "top_ratio": None,
-            "top_bias": "NEUTRAL",
-            "liq_long_usd": None,
-            "liq_short_usd": None,
-            "liq_bias": "NEUTRAL",
-        }
-
-    headers = {
-        "Accept": "application/json",
-        "CG-API-KEY": api_key,
-    }
-
     symbol_no_usdt = symbol.replace("USDT", "").upper()
 
-    top_url = os.getenv("COINGLASS_TOPTRADERS_URL", "").strip()
-    liq_url = os.getenv("COINGLASS_LIQUIDATIONS_URL", "").strip()
-
-    top_long_pct = top_short_pct = top_ratio = None
+    # قيم افتراضية
+    top_long_pct = None
+    top_short_pct = None
+    top_ratio = None
     top_bias = "NEUTRAL"
-    liq_long_usd = liq_short_usd = None
+
+    liq_long_usd = None
+    liq_short_usd = None
     liq_bias = "NEUTRAL"
 
-    # ---- Top Traders Long/Short (اختياري) ----
-    if top_url:
-        try:
-            resp = requests.get(
-                top_url,
-                params={"symbol": symbol_no_usdt},
-                headers=headers,
-                timeout=5,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                item = None
-                if isinstance(data, dict):
-                    item = data.get("data") or data
-                elif isinstance(data, list) and data:
-                    item = data[-1]
+    # ---- Top Traders L/S ----
+    try:
+        top = get_top_long_short_ratio(
+            symbol=symbol_no_usdt,
+            exchange="Binance",
+            interval="4h",
+            limit=1,
+        )
+        if top.get("available"):
+            top_long_pct = top.get("top_long_pct")
+            top_short_pct = top.get("top_short_pct")
+            top_ratio = top.get("top_long_short_ratio")
 
-                if isinstance(item, dict):
-                    long_v = item.get("longRatio") or item.get("long") or item.get("topLongRatio")
-                    short_v = item.get("shortRatio") or item.get("short") or item.get("topShortRatio")
-                    try:
-                        if long_v is not None:
-                            top_long_pct = float(long_v)
-                        if short_v is not None:
-                            top_short_pct = float(short_v)
-                        if top_long_pct is not None and top_short_pct is not None and top_short_pct > 0:
-                            top_ratio = top_long_pct / top_short_pct
-                            if top_ratio > 1.2:
-                                top_bias = "LONG"
-                            elif top_ratio < 0.8:
-                                top_bias = "SHORT"
-                            else:
-                                top_bias = "NEUTRAL"
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+            if top_ratio is not None:
+                if top_ratio > 1.2:
+                    top_bias = "LONG"
+                elif top_ratio < 0.8:
+                    top_bias = "SHORT"
+                else:
+                    top_bias = "NEUTRAL"
+    except Exception as e:
+        print("Coinglass top ratio error:", e)
 
-    # ---- Liquidations (اختياري) ----
-    if liq_url:
-        try:
-            resp = requests.get(
-                liq_url,
-                params={"symbol": symbol_no_usdt},
-                headers=headers,
-                timeout=5,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                item = None
-                if isinstance(data, dict):
-                    item = data.get("data") or data
-                elif isinstance(data, list) and data:
-                    item = data[-1]
-
-                if isinstance(item, dict):
-                    long_liq = item.get("longLiquidation") or item.get("longLiq")
-                    short_liq = item.get("shortLiquidation") or item.get("shortLiq")
-                    try:
-                        if long_liq is not None:
-                            liq_long_usd = float(long_liq)
-                        if short_liq is not None:
-                            liq_short_usd = float(short_liq)
-
-                        if liq_long_usd is not None and liq_short_usd is not None:
-                            if liq_long_usd > liq_short_usd * 1.3:
-                                liq_bias = "LONG_WASHOUT"
-                            elif liq_short_usd > liq_long_usd * 1.3:
-                                liq_bias = "SHORT_WASHOUT"
-                            else:
-                                liq_bias = "NEUTRAL"
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+    # ---- Liquidations ----
+    try:
+        liq = get_liquidation_intel(
+            symbol=symbol_no_usdt,
+            exchange="Binance",
+            interval="4h",
+        )
+        if liq.get("available"):
+            liq_long_usd = liq.get("long_liq")
+            liq_short_usd = liq.get("short_liq")
+            liq_bias = liq.get("liq_bias", "NEUTRAL")
+    except Exception as e:
+    print("Coinglass liquidation error:", e)
 
     return {
         "top_long_pct": top_long_pct,
@@ -184,6 +126,7 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
         "liq_short_usd": liq_short_usd,
         "liq_bias": liq_bias,
     }
+
 
 
 # =========================

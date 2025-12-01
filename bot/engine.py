@@ -7,7 +7,7 @@ import csv
 import os
 from datetime import datetime
 
-from analytics import performance_intel
+from .analytics import performance_intel
 
 
 # =========================

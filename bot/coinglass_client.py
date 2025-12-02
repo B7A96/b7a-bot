@@ -1,8 +1,6 @@
 import os
-import time
 import requests
 from typing import Dict, Any, Optional, List
-
 
 COINGLASS_BASE_URL = "https://open-api-v4.coinglass.com"
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY")
@@ -22,198 +20,239 @@ def _headers() -> Dict[str, str]:
 
 
 def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Helper بسيط للنداء على Coinglass V4.
+    يرفع CoinglassError لو صار HTTP error أو code != "0".
+    """
     url = COINGLASS_BASE_URL + path
-    resp = requests.get(url, headers=_headers(), params=params or {}, timeout=10)
+    resp = requests.get(url, headers=_headers(), params=params or {}, timeout=8)
     if resp.status_code != 200:
         raise CoinglassError(f"HTTP {resp.status_code}: {resp.text}")
     data = resp.json()
-    # حسب docs: code = "0" يعني success
     if str(data.get("code")) != "0":
         raise CoinglassError(f"Coinglass error: {data}")
     return data
 
 
-# ======================
-# Simple Cache + Flags
-# ======================
-_TOP_CACHE: Dict[tuple, tuple] = {}       # key -> (ts, result)
-_TOP_CACHE_TTL = 300                      # 5 دقائق
-
-_LIQ_CACHE: Dict[str, tuple] = {}         # symbol -> (ts, result)
-_LIQ_CACHE_TTL = 180                      # 3 دقائق
-
-_LIQ_SUPPORTED = True                     # لو طلع "Not Supported" نعطله نهائياً
-
-
-# ================================
-# 1) Top Long/Short Position Ratio
-# ================================
-# endpoint: /api/futures/top-long-short-position-ratio/history :contentReference[oaicite:1]{index=1}
-
-def get_top_long_short_ratio(
-    symbol: str,
-    exchange: str = "Binance",
-    interval: str = "4h",
-    limit: int = 1,
-) -> Dict[str, Any]:
+def _symbol_base(symbol: str) -> str:
     """
-    يرجّع آخر قيمة لـ Long/Short Ratio للـ top traders.
-    الآن فيه:
-      - Caching 5 دقائق على مستوى (symbol, exchange, interval)
-      - حماية بسيطة من Too Many Requests
+    يحول BTCUSDT → BTC
     """
-    key = (symbol.upper(), exchange, interval)
-    now = time.time()
+    s = symbol.strip().upper()
+    if s.endswith("USDT"):
+        s = s[:-4]
+    return s
 
-    # 1) إذا عندنا كاش جديد → رجّعه مباشرة
-    if key in _TOP_CACHE:
-        ts, cached = _TOP_CACHE[key]
-        if now - ts < _TOP_CACHE_TTL:
-            return cached
 
-    path = "/api/futures/top-long-short-position-ratio/history"
-    params = {
-        "symbol": symbol.upper(),
-        "exchange": exchange,
-        "interval": interval,
-        "limit": limit,
-    }
+# ============================
+# 1) Futures Open Interest
+#    /api/futures/open-interest/exchange-list
+# ============================
 
+def get_open_interest_intel(symbol: str) -> Dict[str, Any]:
+    """
+    إنتل عن الـ Open Interest للعقود الدائمة من Coinglass (endpoint مسموح لـ Hobbyist).
+
+    نرجع:
+      - oi_usd        : إجمالي عقود مفتوحة بالدولار (كل المنصات)
+      - oi_change_24h : نسبة التغير خلال 24 ساعة
+      - oi_bias       : LEVERAGE_UP / LEVERAGE_DOWN / NEUTRAL
+    """
+    base = _symbol_base(symbol)
     try:
-        data = _get(path, params=params)
-        items: List[Dict[str, Any]] = data.get("data", []) or []
-        if not items:
-            result = {
-                "available": False,
-                "top_long_pct": None,
-                "top_short_pct": None,
-                "top_long_short_ratio": None,
-            }
-        else:
-            last = items[-1]
-            result = {
-                "available": True,
-                "top_long_pct": float(last.get("top_position_long_percent", 0.0)),
-                "top_short_pct": float(last.get("top_position_short_percent", 0.0)),
-                "top_long_short_ratio": float(
-                    last.get("top_position_long_short_ratio", 0.0)
-                ),
-            }
-
+        data = _get("/api/futures/open-interest/exchange-list", params={"symbol": base})
     except CoinglassError as e:
-        # لو Too Many Requests أو أي خطأ → نرجّع نتيجة محايدة
-        print("Coinglass top ratio error:", e)
-        result = {
-            "available": False,
-            "top_long_pct": None,
-            "top_short_pct": None,
-            "top_long_short_ratio": None,
-        }
-
-    _TOP_CACHE[key] = (now, result)
-    return result
-
-
-
-# ================================
-# 2) Liquidation Coin List (حجم التصفيات)
-# ================================
-# endpoint: /api/futures/liquidation/coin-list :contentReference[oaicite:2]{index=2}
-
-def get_liquidation_intel(
-    symbol: str,
-    interval: str = "4h",
-    window: int = 24,
-) -> Dict[str, Any]:
-    """
-    Liquidation Intel مبسّط مع مراعاة:
-      - بعض الخطط (مثل Hobbyist) ما تدعم هالـ endpoint → "Not Supported"
-      - نستخدم Cache عشان ما نكرر الطلب.
-    لو الخطة ما تدعم → يرجّع available=False دائماً بدون ما يزعج Coinglass.
-    """
-    global _LIQ_SUPPORTED
-
-    # لو عرفنا من قبل إنه غير مدعوم → رجّع محايد على طول
-    if not _LIQ_SUPPORTED:
         return {
             "available": False,
-            "error": "Not supported on current Coinglass plan",
-            "long_liq": None,
-            "short_liq": None,
-            "liq_bias": "NEUTRAL",
+            "error": str(e),
+            "oi_usd": None,
+            "oi_change_24h": None,
+            "oi_bias": "NEUTRAL",
         }
 
-    symbol_u = symbol.upper()
-    now = time.time()
-
-    # كاش لكل رمز
-    if symbol_u in _LIQ_CACHE:
-        ts, cached = _LIQ_CACHE[symbol_u]
-        if now - ts < _LIQ_CACHE_TTL:
-            return cached
-
-    path = "/api/futures/liquidation/aggregated-history"
-    params = {
-        "symbol": symbol_u,
-        "interval": interval,   # مثل "4h"
-        "window": window,       # مثلاً 24 ساعة
-    }
-
-    try:
-        data = _get(path, params=params)
-    except CoinglassError as e:
-        msg = str(e)
-        print("Coinglass liquidation error:", msg)
-
-        # لو الخطة ما تدعم أو رجّع Not Supported → عطّل الـ endpoint نهائياً
-        if "Not Supported" in msg or "Account level" in msg:
-            _LIQ_SUPPORTED = False
-
-        result = {
-            "available": False,
-            "error": msg,
-            "long_liq": None,
-            "short_liq": None,
-            "liq_bias": "NEUTRAL",
-        }
-        _LIQ_CACHE[symbol_u] = (now, result)
-        return result
-
-    items: List[Dict[str, Any]] = data.get("data", []) or []
-    if not items:
-        result = {
+    items: List[Dict[str, Any]] = data.get("data") or []
+    if not isinstance(items, list) or not items:
+        return {
             "available": False,
             "error": None,
-            "long_liq": None,
-            "short_liq": None,
-            "liq_bias": "NEUTRAL",
+            "oi_usd": None,
+            "oi_change_24h": None,
+            "oi_bias": "NEUTRAL",
         }
-        _LIQ_CACHE[symbol_u] = (now, result)
-        return result
 
-    long_liq_total = 0.0
-    short_liq_total = 0.0
-
+    # نفضّل صف "All" لو موجود (كل المنصات)
+    row: Dict[str, Any] = items[0]
     for it in items:
-        long_liq_total += float(it.get("longVolUsd", 0.0))
-        short_liq_total += float(it.get("shortVolUsd", 0.0))
+        ex_name = str(it.get("exName") or it.get("exchange") or "").lower()
+        if ex_name == "all":
+            row = it
+            break
 
-    if long_liq_total + short_liq_total <= 0:
-        liq_bias = "NEUTRAL"
-    elif long_liq_total > short_liq_total * 1.2:
-        liq_bias = "LONG_FLUSH_SOON"
-    elif short_liq_total > long_liq_total * 1.2:
-        liq_bias = "SHORT_SQUEEZE_SOON"
+    def _pick(keys, default=0.0):
+        for k in keys:
+            if k in row and row[k] is not None:
+                try:
+                    return float(row[k])
+                except Exception:
+                    pass
+        return float(default)
+
+    oi_usd = _pick(
+        ["openInterestUsd", "open_interest_usd", "openInterestValue", "open_interest_value"],
+        0.0,
+    )
+    oi_change_24h = _pick(
+        ["openInterestChangePercent24h", "open_interest_change_percent_24h", "openInterest24hChangePercent"],
+        0.0,
+    )
+
+    if oi_change_24h > 5:
+        oi_bias = "LEVERAGE_UP"
+    elif oi_change_24h < -5:
+        oi_bias = "LEVERAGE_DOWN"
     else:
-        liq_bias = "BALANCED"
+        oi_bias = "NEUTRAL"
 
-    result = {
+    return {
         "available": True,
         "error": None,
-        "long_liq": long_liq_total,
-        "short_liq": short_liq_total,
-        "liq_bias": liq_bias,
+        "oi_usd": oi_usd,
+        "oi_change_24h": oi_change_24h,
+        "oi_bias": oi_bias,
     }
 
-    _LIQ_CACHE[symbol_u] = (now, result)
-    return result
+
+# ============================
+# 2) Supported Coins (Futures / Spot)
+#    /api/futures/supported-coins
+#    /api/spot/supported-coins
+# ============================
+
+def _lookup_supported(symbol: str, market: str) -> Dict[str, Any]:
+    """
+    Helper عام للـ futures / spot.
+    نستخدمه مرة لكل تحليل (ما نحرق الـ rate-limit).
+    """
+    base = _symbol_base(symbol)
+    if market == "futures":
+        path = "/api/futures/supported-coins"
+    elif market == "spot":
+        path = "/api/spot/supported-coins"
+    else:
+        raise ValueError("market must be 'futures' or 'spot'")
+
+    try:
+        data = _get(path)
+    except CoinglassError as e:
+        return {"available": False, "error": str(e), "listed": None, "raw": None}
+
+    items: List[Dict[str, Any]] = data.get("data") or []
+    if not isinstance(items, list):
+        items = []
+
+    found: Optional[Dict[str, Any]] = None
+    for it in items:
+        sym = str(it.get("symbol") or it.get("coin") or it.get("baseAsset") or "").upper()
+        if sym == base:
+            found = it
+            break
+
+    return {
+        "available": True,
+        "error": None,
+        "listed": found is not None,
+        "raw": found,
+    }
+
+
+def get_futures_supported(symbol: str) -> Dict[str, Any]:
+    return _lookup_supported(symbol, "futures")
+
+
+def get_spot_supported(symbol: str) -> Dict[str, Any]:
+    return _lookup_supported(symbol, "spot")
+
+
+# ============================
+# 3) Bitcoin ETF List
+#    /api/etf/bitcoin/list
+# ============================
+
+def get_bitcoin_etf_intel() -> Dict[str, Any]:
+    """
+    Bitcoin ETF intel (متاح حتى لـ Hobbyist).
+    نستخدمه فقط لما يكون الزوج BTCUSDT كـ Sentiment مؤسسات.
+    """
+    try:
+        data = _get("/api/etf/bitcoin/list")
+    except CoinglassError as e:
+        return {
+            "available": False,
+            "error": str(e),
+            "funds": 0,
+            "trading_count": 0,
+            "halted_count": 0,
+        }
+
+    items: List[Dict[str, Any]] = data.get("data") or []
+    if not isinstance(items, list):
+        items = []
+
+    trading = 0
+    halted = 0
+    for it in items:
+        status = str(it.get("market_status") or it.get("marketStatus") or "").lower()
+        if "trading" in status or status == "open":
+            trading += 1
+        elif "halt" in status or "closed" in status or "suspend" in status:
+            halted += 1
+
+    return {
+        "available": True,
+        "error": None,
+        "funds": len(items),
+        "trading_count": trading,
+        "halted_count": halted,
+    }
+
+
+# ============================
+# 4) High-level aggregator used by engine.py
+# ============================
+
+def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
+    """
+    واجهة موحدة يستدعيها الـ B7A Ultra Engine.
+    ترجع dict فيه:
+      - open_interest
+      - futures_status
+      - spot_status
+      - btc_etf (لو BTC فقط)
+    """
+    if not COINGLASS_API_KEY:
+        # ما في مفتاح → نرجع Neutral
+        return {
+            "available": False,
+            "open_interest": {"available": False, "oi_usd": None, "oi_change_24h": None, "oi_bias": "NEUTRAL"},
+            "futures_status": {"available": False, "listed": None, "raw": None},
+            "spot_status": {"available": False, "listed": None, "raw": None},
+            "btc_etf": {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0},
+        }
+
+    base = _symbol_base(symbol)
+
+    oi = get_open_interest_intel(base)
+    fut = get_futures_supported(base)
+    spot = get_spot_supported(base)
+
+    btc_etf = {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0}
+    if base == "BTC":
+        btc_etf = get_bitcoin_etf_intel()
+
+    return {
+        "available": True,
+        "open_interest": oi,
+        "futures_status": fut,
+        "spot_status": spot,
+        "btc_etf": btc_etf,
+    }

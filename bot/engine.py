@@ -280,6 +280,88 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
         "ask_walls": ask_walls,
     }
 
+# =========================
+# Coinglass Intel (باستخدام coinglass_client الرسمي)
+# =========================
+
+def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
+    """
+    يدمج:
+      - Top Traders Long/Short Ratio
+      - Liquidations Long vs Short
+    من Coinglass (باستخدام coinglass_client.py)
+
+    يرجّع شكل موحّد عشان نستخدمه في الملخص + تعديل السكور.
+    """
+    base_symbol = symbol.replace("USDT", "").upper()
+
+    top_long_pct = None
+    top_short_pct = None
+    top_ratio = None
+    top_bias = "NEUTRAL"
+
+    liq_long_usd = None
+    liq_short_usd = None
+    liq_bias = "NEUTRAL"
+
+    # ---------- 1) Top Long / Short Ratio ----------
+    try:
+        top = get_top_long_short_ratio(
+            symbol=base_symbol,
+            exchange="Binance",
+            interval="4h",
+            limit=1,
+        )
+        if top.get("available"):
+            top_long_pct = float(top.get("top_long_pct", 0.0))
+            top_short_pct = float(top.get("top_short_pct", 0.0))
+            ratio = float(top.get("top_long_short_ratio", 0.0))
+
+            if ratio > 0:
+                top_ratio = ratio
+                if ratio > 1.2:
+                    top_bias = "LONG"
+                elif ratio < 0.8:
+                    top_bias = "SHORT"
+                else:
+                    top_bias = "NEUTRAL"
+    except Exception as e:
+        # ما نكسر البوت لو Coinglass علق
+        print("Coinglass top_long_short_ratio error:", e)
+
+    # ---------- 2) Liquidations Intel ----------
+    try:
+        liq = get_liquidation_intel(
+            symbol=base_symbol,   # نفس الـ base (BTC, ETH, ...)
+            exchange="Binance",
+            window="4h",
+        )
+        if liq.get("available"):
+            liq_long_usd = float(liq.get("long_liq", 0.0))
+            liq_short_usd = float(liq.get("short_liq", 0.0))
+            liq_bias_raw = liq.get("liq_bias", "NEUTRAL")
+
+            # نوحّد القيم شوي
+            if liq_bias_raw in ("LONG_FLUSH_SOON", "LONG_DOMINANT"):
+                liq_bias = "LONG_FLUSH_SOON"
+            elif liq_bias_raw in ("SHORT_SQUEEZE_SOON", "SHORT_DOMINANT"):
+                liq_bias = "SHORT_SQUEEZE_SOON"
+            elif liq_bias_raw in ("BALANCED", "NEUTRAL", None):
+                liq_bias = "NEUTRAL"
+            else:
+                liq_bias = str(liq_bias_raw)
+    except Exception as e:
+        print("Coinglass liquidation_intel error:", e)
+
+    return {
+        "top_long_pct": top_long_pct,
+        "top_short_pct": top_short_pct,
+        "top_ratio": top_ratio,
+        "top_bias": top_bias,
+        "liq_long_usd": liq_long_usd,
+        "liq_short_usd": liq_short_usd,
+        "liq_bias": liq_bias,
+    }
 
 # =========================
 # Trade Logger
@@ -1463,6 +1545,35 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         orderbook_intel=orderbook_intel,
         binance_sentiment=binance_sentiment,
     )
+    
+    # 3.25) تعديل خفيف للسكور حسب Coinglass (Top Traders + Liquidations)
+    if coinglass:
+        try:
+            top_bias = coinglass.get("top_bias", "NEUTRAL")
+            top_ratio = coinglass.get("top_ratio")
+            liq_bias = coinglass.get("liq_bias", "NEUTRAL")
+
+            delta = 0.0
+
+            # دعم للشراء لو الكبار Long بقوة
+            if combined["action"] == "BUY" and top_ratio:
+                if top_bias == "LONG" and top_ratio >= 1.3:
+                    delta += 3.0
+                elif top_bias == "SHORT" and top_ratio <= 0.8:
+                    delta -= 3.0
+
+            # دعم للبيع لو في Long Flush قريب
+            if combined["action"] == "SELL":
+                if liq_bias == "LONG_FLUSH_SOON":
+                    delta += 2.0  # احتمال تصفية لونغات → يدعم الهبوط
+                elif liq_bias == "SHORT_SQUEEZE_SOON":
+                    delta -= 2.0  # احتمال Short Squeeze → نخفف البيع
+
+            combined["score"] = max(
+                0.0, min(100.0, combined.get("score", 50.0) + delta)
+            )
+        except Exception as e:
+            print("Coinglass impact error:", e)
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:

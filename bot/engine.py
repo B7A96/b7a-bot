@@ -7,6 +7,7 @@ import csv
 import os
 from datetime import datetime
 
+from .coinglass_client import get_coinglass_intel
 from .analytics import performance_intel
 
 
@@ -57,16 +58,6 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
     }
 
 
-# =========================
-# Coinglass Intel (معطّل / اختياري)
-# =========================
-
-def get_coinglass_intel(symbol: str) -> Optional[Dict[str, Any]]:
-    """
-    حالياً نرجّع None عشان نعتمد أكثر على Binance Sentiment المجاني.
-    لو حاب نفعل Coinglass لاحقاً نقدر نعدلها.
-    """
-    return None
 
 
 # =========================
@@ -1618,26 +1609,66 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 f"Binance Sentiment → حسابات الفيوتشر تميل للـ SHORT بقوة تقريبية {bs_strength:.1f} نقطة."
             )
 
-    # 📊 ملخص Coinglass (لو متوفر مستقبلاً)
+    # 📊 Coinglass Intel (لو متوفر)
     if coinglass:
-        tl = coinglass.get("top_long_pct")
-        ts = coinglass.get("top_short_pct")
-        tr = coinglass.get("top_ratio")
-        liq_l = coinglass.get("liq_long_usd")
-        liq_s = coinglass.get("liq_short_usd")
-        top_bias = coinglass.get("top_bias", "NEUTRAL")
-        liq_b = coinglass.get("liq_bias", "NEUTRAL")
+        try:
+            oi = (coinglass or {}).get("open_interest") or {}
+            fut = (coinglass or {}).get("futures_status") or {}
+            spot_i = (coinglass or {}).get("spot_status") or {}
+            etf = (coinglass or {}).get("btc_etf") or {}
 
-        parts = []
-        if tl is not None and ts is not None:
-            parts.append(f"Top Traders Long/Short ≈ {tl:.1f}% / {ts:.1f}%")
-            if tr:
-                parts.append(f"Ratio ≈ {tr:.2f} (Bias: {top_bias})")
-        if liq_l is not None and liq_s is not None:
-            parts.append(f"Liquidations L/S ≈ {liq_l:.0f} / {liq_s:.0f} USD – Bias: {liq_b}")
+            oi_parts = []
+            if oi.get("available"):
+                oi_usd = oi.get("oi_usd")
+                oi_chg = oi.get("oi_change_24h")
+                oi_bias = oi.get("oi_bias", "NEUTRAL")
 
-        if parts:
-            reason_lines.append("📊 Coinglass Intel → " + " | ".join(parts))
+                if oi_usd is not None:
+                    try:
+                        oi_parts.append(f"OI ≈ {oi_usd:,.0f} USD")
+                    except Exception:
+                        oi_parts.append(f"OI ≈ {oi_usd} USD")
+
+                if oi_chg is not None:
+                    oi_parts.append(f"24h ΔOI ≈ {oi_chg:.1f}%")
+
+                if oi_bias and oi_bias != "NEUTRAL":
+                    if oi_bias == "LEVERAGE_UP":
+                        oi_parts.append("Leverage Bias: UP (مراكز جديدة تفتح)")
+                    elif oi_bias == "LEVERAGE_DOWN":
+                        oi_parts.append("Leverage Bias: DOWN (مراكز تتقفل)")
+                    else:
+                        oi_parts.append(f"Leverage Bias: {oi_bias}")
+
+            status_parts = []
+            if fut.get("available") and fut.get("listed") is not None:
+                status_parts.append("Futures: LISTED" if fut["listed"] else "Futures: NOT LISTED")
+            if spot_i.get("available") and spot_i.get("listed") is not None:
+                status_parts.append("Spot: LISTED" if spot_i["listed"] else "Spot: NOT LISTED")
+
+            etf_parts = []
+            if etf.get("available") and etf.get("funds", 0) > 0:
+                funds = etf.get("funds", 0)
+                trading = etf.get("trading_count", 0)
+                halted = etf.get("halted_count", 0)
+                etf_parts.append(
+                    f"BTC ETFs: {trading}/{funds} trading, {halted} halted → يعكس شهية المؤسسات على بيتكوين."
+                )
+
+            all_parts = []
+            if oi_parts:
+                all_parts.append("Open Interest: " + " | ".join(oi_parts))
+            if status_parts:
+                all_parts.append("Listings: " + " | ".join(status_parts))
+            if etf_parts:
+                all_parts.extend(etf_parts)
+
+            if all_parts:
+                reason_lines.append("📊 Coinglass Intel → " + " || ".join(all_parts))
+        except Exception:
+            # أي خطأ هنا ما نسمح له يكسر الرسالة
+            pass
+
 
     if perf.get("note"):
         reason_lines.append(perf["note"])

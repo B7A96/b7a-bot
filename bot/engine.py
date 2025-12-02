@@ -7,7 +7,6 @@ import csv
 import os
 from datetime import datetime
 
-from .coinglass_client import get_top_long_short_ratio, get_liquidation_intel
 from .analytics import performance_intel
 
 
@@ -15,9 +14,10 @@ from .analytics import performance_intel
 # إعدادات عامة
 # =========================
 
-BINANCE_BASE_URL = "https://api.binance.com"
+BINANCE_SPOT_BASE_URL = "https://api.binance.com"
+BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 
-# الفريمات اللي نستخدمها
+# الفريمات اللي نستخدمها للتحليل
 TIMEFRAMES = {
     "15m": "15m",
     "1h": "1h",
@@ -58,75 +58,95 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
 
 
 # =========================
-# Coinglass Intel
+# Coinglass Intel (معطّل / اختياري)
 # =========================
 
-def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
+def get_coinglass_intel(symbol: str) -> Optional[Dict[str, Any]]:
     """
-    Wrapper فوق coinglass_client:
-    - يستخدم get_top_long_short_ratio
-    - يستخدم get_liquidation_intel
-    ويرجع فورمات موحّد للبوت.
+    حالياً نرجّع None عشان نعتمد أكثر على Binance Sentiment المجاني.
+    لو حاب نفعل Coinglass لاحقاً نقدر نعدلها.
     """
-    symbol_no_usdt = symbol.replace("USDT", "").upper()
+    return None
 
-    # قيم افتراضية
-    top_long_pct = None
-    top_short_pct = None
-    top_ratio = None
-    top_bias = "NEUTRAL"
 
-    liq_long_usd = None
-    liq_short_usd = None
-    liq_bias = "NEUTRAL"
+# =========================
+# Binance Sentiment (بديل مجاني لـ Coinglass)
+# =========================
 
-    # ---- Top Traders L/S ----
-    try:
-        top = get_top_long_short_ratio(
-            symbol=symbol_no_usdt,
-            exchange="Binance",
-            interval="4h",
-            limit=1,
-        )
-        if top.get("available"):
-            top_long_pct = top.get("top_long_pct")
-            top_short_pct = top.get("top_short_pct")
-            top_ratio = top.get("top_long_short_ratio")
-
-            if top_ratio is not None:
-                if top_ratio > 1.2:
-                    top_bias = "LONG"
-                elif top_ratio < 0.8:
-                    top_bias = "SHORT"
-                else:
-                    top_bias = "NEUTRAL"
-    except Exception as e:
-        print("Coinglass top ratio error:", e)
-
-    # ---- Liquidations ----
-    try:
-        liq = get_liquidation_intel(
-            symbol=symbol_no_usdt,
-            exchange="Binance",
-            interval="4h",
-        )
-        if liq.get("available"):
-            liq_long_usd = liq.get("long_liq")
-            liq_short_usd = liq.get("short_liq")
-            liq_bias = liq.get("liq_bias", "NEUTRAL")
-    except Exception as e:
-        print("Coinglass liquidation error:", e)
-
-    return {
-        "top_long_pct": top_long_pct,
-        "top_short_pct": top_short_pct,
-        "top_ratio": top_ratio,
-        "top_bias": top_bias,
-        "liq_long_usd": liq_long_usd,
-        "liq_short_usd": liq_short_usd,
-        "liq_bias": liq_bias,
+def fetch_binance_sentiment(symbol: str) -> Dict[str, Any]:
+    """
+    يقرأ Top Long/Short Accounts Ratio من Binance Futures.
+    يستخدم كـ Smart Sentiment خفيف:
+      - bias: LONG / SHORT / NEUTRAL
+      - strength: فرق القوة بين الطرفين (0 - 100 تقريباً)
+    """
+    symbol_norm = _normalize_symbol(symbol)
+    url = f"{BINANCE_FUTURES_BASE_URL}/futures/data/topLongShortAccountRatio"
+    params = {
+        "symbol": symbol_norm,
+        "period": "5m",   # فترة قصيرة تعطي إحساس لحظي
+        "limit": 50,
     }
 
+    try:
+        resp = requests.get(url, params=params, timeout=5)
+        if resp.status_code != 200:
+            return {
+                "available": False,
+                "long_pct": None,
+                "short_pct": None,
+                "bias": "NEUTRAL",
+                "strength": 0.0,
+            }
+
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            return {
+                "available": False,
+                "long_pct": None,
+                "short_pct": None,
+                "bias": "NEUTRAL",
+                "strength": 0.0,
+            }
+
+        last = data[-1]
+        long_ratio = float(last.get("longAccount", 0.0))
+        short_ratio = float(last.get("shortAccount", 0.0))
+
+        if long_ratio + short_ratio > 0:
+            total = long_ratio + short_ratio
+            long_pct = long_ratio / total * 100.0
+            short_pct = short_ratio / total * 100.0
+        else:
+            long_pct = 0.0
+            short_pct = 0.0
+
+        bias = "NEUTRAL"
+        strength = 0.0
+
+        if long_pct > short_pct * 1.1:
+            bias = "LONG"
+            strength = long_pct - short_pct
+        elif short_pct > long_pct * 1.1:
+            bias = "SHORT"
+            strength = short_pct - long_pct
+
+        return {
+            "available": True,
+            "long_pct": long_pct,
+            "short_pct": short_pct,
+            "bias": bias,
+            "strength": strength,
+            "raw": last,
+        }
+    except Exception:
+        return {
+            "available": False,
+            "long_pct": None,
+            "short_pct": None,
+            "bias": "NEUTRAL",
+            "strength": 0.0,
+        }
 
 
 # =========================
@@ -135,10 +155,10 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
 
 def fetch_klines(symbol: str, interval: str, limit: int = 200) -> Dict[str, np.ndarray]:
     """
-    يجلب بيانات الشموع من بايننس.
+    يجلب بيانات الشموع من بايننس (Spot).
     ملاحظة: نفترض أن الـ symbol جاي جاهز (USDT مضاف لو تحتاجه).
     """
-    url = f"{BINANCE_BASE_URL}/api/v3/klines"
+    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": limit}
 
     resp = requests.get(url, params=params, timeout=10)
@@ -176,7 +196,7 @@ def fetch_orderbook(symbol: str, limit: int = 100) -> Dict[str, Any]:
     نستخدمه لقياس ضغط الشراء/البيع (BID/ASK Pressure).
     """
     symbol = _normalize_symbol(symbol)
-    url = f"{BINANCE_BASE_URL}/api/v3/depth"
+    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/depth"
     params = {"symbol": symbol, "limit": limit}
 
     resp = requests.get(url, params=params, timeout=10)
@@ -480,7 +500,7 @@ def _detect_swings(
     return swing_highs, swing_lows
 
 
-def _cluster_levels(prices: List[float], tolerance: float = 0.001) -> List[Dict[str, Any]]:
+def _cluster_levels(prices: List[float], tolerance: float = 0.0015) -> List[Dict[str, Any]]:
     """
     يجمع القمم / القيعان المتقاربة في مستوى واحد (zone).
     """
@@ -841,12 +861,14 @@ def combine_timeframes(
     tf_data: Dict[str, Dict[str, Any]],
     arkham_intel: Optional[Dict[str, Any]] = None,
     orderbook_intel: Optional[Dict[str, Any]] = None,
+    binance_sentiment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع:
     - فلتر حماية من الشراء في القمم والبيع في القيعان
-    - إضافة ذكية من Arkham Smart Money (لو موجودة)
-    - Orderbook Pressure من Binance (ضغط أوامر الشراء/البيع).
+    - Arkham Smart Money (placeholder)
+    - Orderbook Pressure من Binance
+    - Binance Sentiment كبديل مجاني لـ Coinglass.
     """
     weights = {
         "15m": 0.2,
@@ -1068,6 +1090,35 @@ def combine_timeframes(
         except Exception:
             pass
 
+    # =========================
+    # Binance Sentiment Boost
+    # =========================
+    sentiment_bias = "NEUTRAL"
+    sentiment_strength = 0.0
+    if binance_sentiment:
+        try:
+            sentiment_bias = binance_sentiment.get("bias", "NEUTRAL")
+            sentiment_strength = float(binance_sentiment.get("strength", 0.0) or 0.0)
+
+            if sentiment_bias != "NEUTRAL" and sentiment_strength > 5:
+                s_intensity = min(sentiment_strength / 50.0, 1.0)  # 0-1
+
+                delta = 0.0
+                if sentiment_bias == "LONG":
+                    if global_trend == "BULLISH":
+                        delta += 3.0 * s_intensity
+                    elif global_trend == "BEARISH":
+                        delta += 1.5 * s_intensity
+                elif sentiment_bias == "SHORT":
+                    if global_trend == "BEARISH":
+                        delta -= 3.0 * s_intensity
+                    elif global_trend == "BULLISH":
+                        delta -= 1.5 * s_intensity
+
+                combined_score += delta
+        except Exception:
+            pass
+
     combined_score = max(0.0, min(100.0, combined_score))
 
     # =========================
@@ -1090,7 +1141,7 @@ def combine_timeframes(
     ext_4h = _extended_side("4h")
     ext_1d = _extended_side("1d")
 
-    extended_up   = (ext_4h == "UP") or (ext_1d == "UP")
+    extended_up = (ext_4h == "UP") or (ext_1d == "UP")
     extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
     # فريم مرجعي قوي (Anchor)
@@ -1140,14 +1191,14 @@ def combine_timeframes(
     ):
         action = "BUY"
 
-    # شروط SELL
+    # شروط SELL (تم تبسيطها شوي عشان تبدأ تطلع إشارات SELL فعلية)
     if (
-        combined_score <= 45.0
+        combined_score <= 50.0
         and bear_align >= 0.45
         and not oversold
         and (
             strong_bear_anchor
-            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("DOWN", "FLAT"))
+            or (global_trend == "BEARISH" and liquidity_bias in ("DOWN", "FLAT"))
         )
     ):
         action = "SELL"
@@ -1238,6 +1289,9 @@ def combine_timeframes(
         # Orderbook info
         "orderbook_bias": orderbook_bias,
         "orderbook_score": round(float(orderbook_score), 2),
+        # Binance Sentiment info
+        "binance_sentiment_bias": sentiment_bias,
+        "binance_sentiment_strength": round(float(sentiment_strength), 2),
     }
 
 
@@ -1370,13 +1424,19 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     except Exception:
         arkham_intel = None
 
-    # 1.25) نحاول جلب Orderbook Intel
+    # 1.25) Orderbook Intel
     try:
         orderbook_intel = analyse_orderbook(symbol_norm, limit=100)
     except Exception:
         orderbook_intel = None
 
-    # 1.5) نحاول جلب Coinglass Intel (لو متوفر)
+    # 1.3) Binance Sentiment (بديل مجاني)
+    try:
+        binance_sentiment = fetch_binance_sentiment(symbol_norm)
+    except Exception:
+        binance_sentiment = None
+
+    # 1.5) Coinglass Intel (حالياً معطّل/اختياري → يرجّع None)
     try:
         coinglass = get_coinglass_intel(symbol_norm)
     except Exception:
@@ -1405,11 +1465,12 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 "pump_dump_risk": "LOW",
             }
 
-    # 3) ندمج الفريمات في قرار واحد + Arkham + Orderbook
+    # 3) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(
         tf_results,
         arkham_intel=arkham_intel,
         orderbook_intel=orderbook_intel,
+        binance_sentiment=binance_sentiment,
     )
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
@@ -1544,7 +1605,20 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
                 f"ضغط البائعين في دفتر الأوامر (Orderbook ASK) ملحوظ (Score ≈ {ob_score:.0f}) → العروض متقدّمة حالياً."
             )
 
-    # 📊 ملخص Coinglass (لو متوفر)
+    # 📊 Binance Sentiment Summary
+    bs_bias = combined.get("binance_sentiment_bias", "NEUTRAL")
+    bs_strength = combined.get("binance_sentiment_strength", 0.0)
+    if bs_bias != "NEUTRAL" and bs_strength:
+        if bs_bias == "LONG":
+            reason_lines.append(
+                f"Binance Sentiment → حسابات الفيوتشر تميل للـ LONG بقوة تقريبية {bs_strength:.1f} نقطة."
+            )
+        else:
+            reason_lines.append(
+                f"Binance Sentiment → حسابات الفيوتشر تميل للـ SHORT بقوة تقريبية {bs_strength:.1f} نقطة."
+            )
+
+    # 📊 ملخص Coinglass (لو متوفر مستقبلاً)
     if coinglass:
         tl = coinglass.get("top_long_pct")
         ts = coinglass.get("top_short_pct")
@@ -1589,9 +1663,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr2": rr2,
         "rr3": rr3,
         "performance": perf,
-        "arkham_intel": arkham_intel,     # Arkham (placeholder)
-        "coinglass": coinglass,           # Coinglass intel في النتيجة
-        "orderbook": orderbook_intel,     # Orderbook intel كامل لو حاب تعرض تفاصيل أكثر
+        "arkham_intel": arkham_intel,             # Arkham (placeholder)
+        "coinglass": coinglass,                   # Coinglass intel (حالياً None)
+        "orderbook": orderbook_intel,             # Orderbook intel
+        "binance_sentiment": binance_sentiment,   # Binance sentiment raw data
     }
 
     # تسجيل الصفقات الفعلية فقط

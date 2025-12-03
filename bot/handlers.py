@@ -11,6 +11,22 @@ from .analytics import get_trades_summary
 # قائمة مراقبة ديناميكية (في الذاكرة)
 WATCHLIST: Set[str] = set(["BTC", "ETH", "SOL", "DOGE", "TON", "BNB"])
 
+# مودات البوت
+MODES = ["SAFE", "BALANCED", "MOMENTUM"]
+
+
+def get_current_mode(context: ContextTypes.DEFAULT_TYPE) -> str:
+    """ترجع المود الحالي لليوزر (افتراضي BALANCED)."""
+    return context.user_data.get("mode", "BALANCED")
+
+
+def set_current_mode(context: ContextTypes.DEFAULT_TYPE, mode: str):
+    """تحديث المود الحالي لليوزر."""
+    mode = (mode or "BALANCED").upper()
+    if mode not in MODES:
+        mode = "BALANCED"
+    context.user_data["mode"] = mode
+
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -19,13 +35,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # /help
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
+    current_mode = get_current_mode(context)
+    text = f"""
 🤖 قائمة الأوامر:
 
 /start – تشغيل البوت
 /help – عرض هذه القائمة
 /price BTC – سعر العملة (مثال: /price sol)
-/signal BTC – إشارة تحليل احترافية (مثال: /signal eth)
+/signal BTC – إشارة تحليل احترافية حسب الـ Mode الحالي ({current_mode})
 
 /scan – فحص أعلى عملات USDT من حيث الفوليوم وإظهار أفضل الفرص
 /scan_watchlist – فحص قائمة المراقبة الخاصة فيك فقط
@@ -37,6 +54,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /list – عرض قائمة المراقبة الحالية
 
 /stats – ملخص أداء الإشارات من اللوق (B7A Ultra Analytics)
+
+⚙️ Mode:
+يتغير من الزر داخل الإشارة:
+SAFE → BALANCED → MOMENTUM
 """
     await update.message.reply_text(text)
 
@@ -81,6 +102,9 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     no_trade = decision.get("no_trade", False)
     market_regime = decision.get("market_regime", "UNKNOWN")
 
+    # mode من القرار أو من نتيجة المحرك
+    mode = decision.get("mode") or signal_data.get("mode", "BALANCED")
+
     # مستويات الصفقة (متعددة الأهداف)
     tp = signal_data.get("tp")
     sl = signal_data.get("sl")
@@ -111,9 +135,10 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     if last_price is not None:
         lines.append(f"💰 <b>السعر الحالي:</b> {last_price:.4f} USDT")
 
-    # Grade + وضع السوق
+    # Grade + وضع السوق + Mode
     lines.append(f"🏆 <b>Grade:</b> {grade}")
     lines.append(f"🌍 <b>وضع السوق العام:</b> {market_regime}")
+    lines.append(f"⚙️ <b>Mode:</b> {mode}")
 
     if no_trade:
         lines.append("⚠️ <b>No-Trade Zone:</b> هذه الإشارة مصنّفة ضعيفة حسب فلتر B7A Ultra.")
@@ -188,7 +213,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
             rr2_text = f" (R:R ≈ {rr2})" if rr2 is not None else ""
             lines.append(f"• TP2 (الهدف الرئيسي): <b>{tp2}</b>{rr2_text}")
         if tp3 is not None:
-            rr3_text = f" (R:R ≈ {rr3})" if rr3 is not None else ""
+            rr3_text = f" (R:R ≈ {rr3})" if rr3 is not None else " (تمديد)"
             lines.append(f"• TP3 (تمديد): <b>{tp3}</b>{rr3_text}")
 
         # توافُق مع التصميم القديم (لو حاب تستخدمه)
@@ -225,7 +250,8 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🚨 استخدم الأمر بالشكل التالي:\n"
             "/signal BTC\n"
             "/signal ETH\n"
-            "/signal SOL"
+            "/signal SOL\n\n"
+            "المود (SAFE/BALANCED/MOMENTUM) يتحدد من الزر داخل الإشارة."
         )
         return
 
@@ -233,12 +259,22 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if symbol.endswith("USDT"):
         symbol = symbol[:-4]
 
+    mode = get_current_mode(context)
+
     await update.message.reply_text(
-        f"⏳ جارِ تحليل السوق لـ {symbol} عبر B7A Ultra Engine ..."
+        f"⏳ جارِ تحليل السوق لـ {symbol} عبر B7A Ultra Engine ({mode} Mode) ..."
     )
 
     try:
-        signal_data = generate_signal(symbol)
+        # لازم يكون generate_signal داعم للـ mode (راح نعدله تحت)
+        signal_data = generate_signal(symbol, mode=mode)
+    except TypeError:
+        # في حال لسه ما عدلت engine وتطلّع unexpected keyword
+        await update.message.reply_text(
+            "⚠️ لازم نحدّث engine.generate_signal عشان يدعم mode.\n"
+            "هدي الرسالة وارجع لي بالكود لو احتجت أعدل لك ملف engine."
+        )
+        return
     except Exception as e:
         print("Signal error:", e)
         await update.message.reply_text(
@@ -249,7 +285,16 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = _build_signal_message(signal_data, symbol)
 
     tv_symbol = signal_data.get("symbol", symbol)
+    decision = signal_data.get("decision", {})
+    current_mode = decision.get("mode") or signal_data.get("mode", mode)
+
     keyboard = [
+        [
+            InlineKeyboardButton(
+                f"⚙️ Mode: {current_mode}",
+                callback_data=f"mode|{tv_symbol}",
+            ),
+        ],
         [
             InlineKeyboardButton(
                 "🔄 تحديث الإشارة", callback_data=f"refresh|{tv_symbol}"
@@ -258,7 +303,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📊 فتح الشارت",
                 url=f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}",
             ),
-        ]
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -276,8 +321,10 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("حدث خطأ في قراءة بيانات التحديث.")
         return
 
+    mode = get_current_mode(context)
+
     try:
-        signal_data = generate_signal(symbol)
+        signal_data = generate_signal(symbol, mode=mode)
     except Exception as e:
         print("Refresh error:", e)
         await query.edit_message_text(
@@ -288,7 +335,16 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = _build_signal_message(signal_data, symbol)
 
     tv_symbol = signal_data.get("symbol", symbol)
+    decision = signal_data.get("decision", {})
+    current_mode = decision.get("mode") or signal_data.get("mode", mode)
+
     keyboard = [
+        [
+            InlineKeyboardButton(
+                f"⚙️ Mode: {current_mode}",
+                callback_data=f"mode|{tv_symbol}",
+            ),
+        ],
         [
             InlineKeyboardButton(
                 "🔄 تحديث الإشارة", callback_data=f"refresh|{tv_symbol}"
@@ -297,7 +353,61 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📊 فتح الشارت",
                 url=f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}",
             ),
-        ]
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="HTML")
+
+
+# زر تغيير الـ Mode (زر واحد يلف بين SAFE → BALANCED → MOMENTUM)
+async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    try:
+        _, symbol = query.data.split("|", 1)
+    except Exception:
+        await query.edit_message_text("حدث خطأ في قراءة بيانات الـ Mode.")
+        return
+
+    # نلف بين المودات
+    current_mode = get_current_mode(context)
+    try:
+        idx = MODES.index(current_mode)
+    except ValueError:
+        idx = 1  # BALANCED
+    new_mode = MODES[(idx + 1) % len(MODES)]
+    set_current_mode(context, new_mode)
+
+    try:
+        signal_data = generate_signal(symbol, mode=new_mode)
+    except Exception as e:
+        print("Toggle mode error:", e)
+        await query.edit_message_text(
+            "❌ صار خطأ أثناء إعادة توليد الإشارة بعد تغيير الـ Mode."
+        )
+        return
+
+    msg = _build_signal_message(signal_data, symbol)
+
+    tv_symbol = signal_data.get("symbol", symbol)
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"⚙️ Mode: {new_mode}",
+                callback_data=f"mode|{tv_symbol}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 تحديث الإشارة", callback_data=f"refresh|{tv_symbol}"
+            ),
+            InlineKeyboardButton(
+                "📊 فتح الشارت",
+                url=f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol}",
+            ),
+        ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -318,7 +428,7 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     for symbol in symbols:
         try:
-            data = generate_signal(symbol)
+            data = generate_signal(symbol)  # يستخدم الوضع الافتراضي داخل الـ engine
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)

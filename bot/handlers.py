@@ -30,7 +30,12 @@ def set_current_mode(context: ContextTypes.DEFAULT_TYPE, mode: str):
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔥 B7A Ultra Bot is LIVE! 🔥")
+    current_mode = get_current_mode(context)
+    await update.message.reply_text(
+        f"🔥 B7A Ultra Bot is LIVE! 🔥\n\n"
+        f"⚙️ Current Mode: {current_mode}\n"
+        f"استخدم /signal BTC لعرض أول إشارة."
+    )
 
 
 # /help
@@ -122,20 +127,18 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     symbol_text = signal_data.get("symbol", symbol_fallback)
 
+    lines: List[str] = []
+
     # =========================
     # HEADER
     # =========================
-    lines: List[str] = []
-
     lines.append(f"<b>⚜️ B7A Ultra Signal – {symbol_text}</b>")
     lines.append("<i>POWERED BY B7A · Dark Gold Edition</i>")
     lines.append("━━━━━━━━━━━━━━━━━━")
 
-    # السعر الحالي
     if last_price is not None:
         lines.append(f"💰 <b>السعر الحالي:</b> {last_price:.4f} USDT")
 
-    # Grade + وضع السوق + Mode
     lines.append(f"🏆 <b>Grade:</b> {grade}")
     lines.append(f"🌍 <b>وضع السوق العام:</b> {market_regime}")
     lines.append(f"⚙️ <b>Mode:</b> {mode}")
@@ -155,7 +158,40 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     lines.append(f"• Confidence: <b>{confidence}</b>")
     lines.append(f"• Pump/Dump Risk: <b>{pump_risk}</b>")
 
+    # =========================
+    # خطة الصفقة (Multi-TP) – الآن مباشرة تحت قرار النظام
+    # =========================
+    lines.append("")
+    lines.append("<b>🎯 خطة الصفقة (Multi-TP)</b>")
+
+    if action in ("BUY", "SELL") and sl is not None:
+        lines.append(f"• نوع الصفقة: <b>{action}</b>")
+        lines.append(f"• SL (وقف الخسارة): <b>{sl}</b>")
+
+        if tp1 is not None:
+            rr1_text = f" (R:R ≈ {rr1})" if rr1 is not None else ""
+            lines.append(f"• TP1: <b>{tp1}</b>{rr1_text}")
+        if tp2 is not None:
+            rr2_text = f" (R:R ≈ {rr2})" if rr2 is not None else ""
+            lines.append(f"• TP2 (الهدف الرئيسي): <b>{tp2}</b>{rr2_text}")
+        if tp3 is not None:
+            rr3_text = f" (R:R ≈ {rr3})" if rr3 is not None else " (تمديد)"
+            lines.append(f"• TP3 (تمديد): <b>{tp3}</b>{rr3_text}")
+
+        if tp is not None and rr is not None:
+            lines.append(f"• الهدف القياسي (TP): <b>{tp}</b> | R:R ≈ <b>{rr}</b>")
+
+        if risk_pct is not None and reward_pct is not None:
+            lines.append(
+                f"• مخاطرة تقريبية على الصفقة: <b>{risk_pct:.1f}%</b> | "
+                f"هدف ربح تقديري: <b>{reward_pct:.1f}%</b>"
+            )
+    else:
+        lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
+
+    # =========================
     # السيولة
+    # =========================
     lines.append("")
     lines.append("<b>💧 السيولة (Liquidity)</b>")
     lines.append(
@@ -197,38 +233,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
         )
 
     # =========================
-    # خطة الصفقة (Multi-TP)
-    # =========================
-    lines.append("")
-    lines.append("<b>🎯 خطة الصفقة (Multi-TP)</b>")
-
-    if action in ("BUY", "SELL") and sl is not None:
-        lines.append(f"• نوع الصفقة: <b>{action}</b>")
-        lines.append(f"• SL (وقف الخسارة): <b>{sl}</b>")
-
-        if tp1 is not None:
-            rr1_text = f" (R:R ≈ {rr1})" if rr1 is not None else ""
-            lines.append(f"• TP1: <b>{tp1}</b>{rr1_text}")
-        if tp2 is not None:
-            rr2_text = f" (R:R ≈ {rr2})" if rr2 is not None else ""
-            lines.append(f"• TP2 (الهدف الرئيسي): <b>{tp2}</b>{rr2_text}")
-        if tp3 is not None:
-            rr3_text = f" (R:R ≈ {rr3})" if rr3 is not None else " (تمديد)"
-            lines.append(f"• TP3 (تمديد): <b>{tp3}</b>{rr3_text}")
-
-        # توافُق مع التصميم القديم (لو حاب تستخدمه)
-        if tp is not None and rr is not None:
-            lines.append(f"• الهدف القياسي (TP): <b>{tp}</b> | R:R ≈ <b>{rr}</b>")
-
-        if risk_pct is not None and reward_pct is not None:
-            lines.append(
-                f"• مخاطرة تقريبية على الصفقة: <b>{risk_pct:.1f}%</b> | "
-                f"هدف ربح تقديري: <b>{reward_pct:.1f}%</b>"
-            )
-    else:
-        lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
-
-    # =========================
     # ملخص ذكي + تحذير
     # =========================
     if reason:
@@ -238,9 +242,10 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     lines.append("")
     lines.append("⚠️ هذا تحليل آلي – استخدم إدارة مخاطر دائماً.")
-    lines.append("— <b>B7A Ultra Engine</b>")
+    lines.append("— <b>X-ista-tg:@B7Acrypto</b>")
 
     return "\n".join(lines)
+
 
 
 # /signal
@@ -266,10 +271,8 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        # لازم يكون generate_signal داعم للـ mode (راح نعدله تحت)
         signal_data = generate_signal(symbol, mode=mode)
     except TypeError:
-        # في حال لسه ما عدلت engine وتطلّع unexpected keyword
         await update.message.reply_text(
             "⚠️ لازم نحدّث engine.generate_signal عشان يدعم mode.\n"
             "هدي الرسالة وارجع لي بالكود لو احتجت أعدل لك ملف engine."
@@ -425,10 +428,12 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ ما قدرت أجيب قائمة العملات من Binance حالياً.")
         return
 
+    mode = get_current_mode(context)
+
     results = []
     for symbol in symbols:
         try:
-            data = generate_signal(symbol)  # يستخدم الوضع الافتراضي داخل الـ engine
+            data = generate_signal(symbol, mode=mode)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -468,10 +473,12 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔍 جارِ فحص قائمة المراقبة الخاصة فيك...")
 
+    mode = get_current_mode(context)
+
     results = []
     for symbol in sorted(WATCHLIST):
         try:
-            data = generate_signal(symbol)
+            data = generate_signal(symbol, mode=mode)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -506,6 +513,8 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📰 تجهيز تقرير يومي مختصر للسوق...")
 
+    mode = get_current_mode(context)
+
     results = []
     try:
         symbols = get_top_usdt_symbols(limit=30)
@@ -515,7 +524,7 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for symbol in symbols:
         try:
-            data = generate_signal(symbol)
+            data = generate_signal(symbol, mode=mode)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -527,7 +536,7 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # تحليل BTC كقائد للسوق
     try:
-        btc_data = generate_signal("BTC")
+        btc_data = generate_signal("BTC", mode=mode)
         btc_decision = btc_data.get("decision", {})
     except Exception:
         btc_decision = {}
@@ -623,10 +632,12 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ ما قدرت أجيب قائمة العملات من Binance حالياً.")
         return
 
+    mode = get_current_mode(context)
+
     results = []
     for symbol in symbols:
         try:
-            data = generate_signal(symbol)
+            data = generate_signal(symbol, mode=mode)
             decision = data.get("decision", {})
             grade = decision.get("grade", "C")
             no_trade = decision.get("no_trade", False)
@@ -685,7 +696,10 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         risk_pct,
         reward_pct,
     ) in top:
-        line = f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | Regime: {regime} | Liquidity: {liq_bias}"
+        line = (
+            f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | "
+            f"Regime: {regime} | Liquidity: {liq_bias}"
+        )
         if rr is not None:
             line += f" | R:R ≈ {rr}"
         if risk_pct is not None and reward_pct is not None:

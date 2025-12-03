@@ -58,8 +58,6 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
     }
 
 
-
-
 # =========================
 # Binance Sentiment (بديل مجاني لـ Coinglass)
 # =========================
@@ -187,7 +185,7 @@ def fetch_orderbook(symbol: str, limit: int = 100) -> Dict[str, Any]:
     نستخدمه لقياس ضغط الشراء/البيع (BID/ASK Pressure).
     """
     symbol = _normalize_symbol(symbol)
-    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/depth"
+    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/depth}"
     params = {"symbol": symbol, "limit": limit}
 
     resp = requests.get(url, params=params, timeout=10)
@@ -280,88 +278,6 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
         "ask_walls": ask_walls,
     }
 
-# =========================
-# Coinglass Intel (باستخدام coinglass_client الرسمي)
-# =========================
-
-def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
-    """
-    يدمج:
-      - Top Traders Long/Short Ratio
-      - Liquidations Long vs Short
-    من Coinglass (باستخدام coinglass_client.py)
-
-    يرجّع شكل موحّد عشان نستخدمه في الملخص + تعديل السكور.
-    """
-    base_symbol = symbol.replace("USDT", "").upper()
-
-    top_long_pct = None
-    top_short_pct = None
-    top_ratio = None
-    top_bias = "NEUTRAL"
-
-    liq_long_usd = None
-    liq_short_usd = None
-    liq_bias = "NEUTRAL"
-
-    # ---------- 1) Top Long / Short Ratio ----------
-    try:
-        top = get_top_long_short_ratio(
-            symbol=base_symbol,
-            exchange="Binance",
-            interval="4h",
-            limit=1,
-        )
-        if top.get("available"):
-            top_long_pct = float(top.get("top_long_pct", 0.0))
-            top_short_pct = float(top.get("top_short_pct", 0.0))
-            ratio = float(top.get("top_long_short_ratio", 0.0))
-
-            if ratio > 0:
-                top_ratio = ratio
-                if ratio > 1.2:
-                    top_bias = "LONG"
-                elif ratio < 0.8:
-                    top_bias = "SHORT"
-                else:
-                    top_bias = "NEUTRAL"
-    except Exception as e:
-        # ما نكسر البوت لو Coinglass علق
-        print("Coinglass top_long_short_ratio error:", e)
-
-    # ---------- 2) Liquidations Intel ----------
-    try:
-        liq = get_liquidation_intel(
-            symbol=base_symbol,   # نفس الـ base (BTC, ETH, ...)
-            exchange="Binance",
-            window="4h",
-        )
-        if liq.get("available"):
-            liq_long_usd = float(liq.get("long_liq", 0.0))
-            liq_short_usd = float(liq.get("short_liq", 0.0))
-            liq_bias_raw = liq.get("liq_bias", "NEUTRAL")
-
-            # نوحّد القيم شوي
-            if liq_bias_raw in ("LONG_FLUSH_SOON", "LONG_DOMINANT"):
-                liq_bias = "LONG_FLUSH_SOON"
-            elif liq_bias_raw in ("SHORT_SQUEEZE_SOON", "SHORT_DOMINANT"):
-                liq_bias = "SHORT_SQUEEZE_SOON"
-            elif liq_bias_raw in ("BALANCED", "NEUTRAL", None):
-                liq_bias = "NEUTRAL"
-            else:
-                liq_bias = str(liq_bias_raw)
-    except Exception as e:
-        print("Coinglass liquidation_intel error:", e)
-
-    return {
-        "top_long_pct": top_long_pct,
-        "top_short_pct": top_short_pct,
-        "top_ratio": top_ratio,
-        "top_bias": top_bias,
-        "liq_long_usd": liq_long_usd,
-        "liq_short_usd": liq_short_usd,
-        "liq_bias": liq_bias,
-    }
 
 # =========================
 # Trade Logger
@@ -1323,7 +1239,7 @@ def combine_timeframes(
     elif (
         combined_score >= 68
         and max_pump_risk != "HIGH"
-        and confidence in ("HIGH", "MEDIUM")
+               and confidence in ("HIGH", "MEDIUM")
         and (bull_align >= 0.50 or bear_align >= 0.50)
     ):
         grade = "A"
@@ -1491,7 +1407,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) نحاول جلب Arkham Intel (لو متوفر مستقبلاً)
+    # 1) Arkham Intel (placeholder)
     try:
         arkham_intel = get_arkham_intel(symbol_norm)
     except Exception:
@@ -1509,7 +1425,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
     except Exception:
         binance_sentiment = None
 
-    # 1.5) Coinglass Intel (حالياً معطّل/اختياري → يرجّع None)
+    # 1.5) Coinglass Intel (من coinglass_client.py)
     try:
         coinglass = get_coinglass_intel(symbol_norm)
     except Exception:
@@ -1545,29 +1461,26 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         orderbook_intel=orderbook_intel,
         binance_sentiment=binance_sentiment,
     )
-    
-    # 3.25) تعديل خفيف للسكور حسب Coinglass (Top Traders + Liquidations)
-    if coinglass:
+
+    # 3.25) تأثير خفيف لـ Coinglass (Open Interest Bias)
+    if coinglass and coinglass.get("available"):
         try:
-            top_bias = coinglass.get("top_bias", "NEUTRAL")
-            top_ratio = coinglass.get("top_ratio")
-            liq_bias = coinglass.get("liq_bias", "NEUTRAL")
+            oi = (coinglass or {}).get("open_interest") or {}
+            oi_bias = oi.get("oi_bias", "NEUTRAL")
+            oi_chg = oi.get("oi_change_24h")
 
             delta = 0.0
 
-            # دعم للشراء لو الكبار Long بقوة
-            if combined["action"] == "BUY" and top_ratio:
-                if top_bias == "LONG" and top_ratio >= 1.3:
-                    delta += 3.0
-                elif top_bias == "SHORT" and top_ratio <= 0.8:
-                    delta -= 3.0
-
-            # دعم للبيع لو في Long Flush قريب
-            if combined["action"] == "SELL":
-                if liq_bias == "LONG_FLUSH_SOON":
-                    delta += 2.0  # احتمال تصفية لونغات → يدعم الهبوط
-                elif liq_bias == "SHORT_SQUEEZE_SOON":
-                    delta -= 2.0  # احتمال Short Squeeze → نخفف البيع
+            if oi_bias == "LEVERAGE_UP" and oi_chg is not None:
+                if combined["action"] == "BUY":
+                    delta += 2.0
+                elif combined["action"] == "SELL":
+                    delta -= 2.0
+            elif oi_bias == "LEVERAGE_DOWN" and oi_chg is not None:
+                if combined["action"] == "SELL":
+                    delta += 2.0
+                elif combined["action"] == "BUY":
+                    delta -= 2.0
 
             combined["score"] = max(
                 0.0, min(100.0, combined.get("score", 50.0) + delta)
@@ -1621,9 +1534,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
-        # 🔥 Weapon 3: حجم الصفقة الذكي حسب أداء الزوج
+        # حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
-        # نضمن إنها ضمن نطاق معقول
         risk_pct = max(0.5, min(3.0, risk_pct))
 
         # مضاعف هدف الربح حسب السكور
@@ -1777,9 +1689,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             if all_parts:
                 reason_lines.append("📊 Coinglass Intel → " + " || ".join(all_parts))
         except Exception:
-            # أي خطأ هنا ما نسمح له يكسر الرسالة
             pass
-
 
     if perf.get("note"):
         reason_lines.append(perf["note"])
@@ -1805,10 +1715,10 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         "rr2": rr2,
         "rr3": rr3,
         "performance": perf,
-        "arkham_intel": arkham_intel,             # Arkham (placeholder)
-        "coinglass": coinglass,                   # Coinglass intel (حالياً None)
-        "orderbook": orderbook_intel,             # Orderbook intel
-        "binance_sentiment": binance_sentiment,   # Binance sentiment raw data
+        "arkham_intel": arkham_intel,
+        "coinglass": coinglass,
+        "orderbook": orderbook_intel,
+        "binance_sentiment": binance_sentiment,
     }
 
     # تسجيل الصفقات الفعلية فقط

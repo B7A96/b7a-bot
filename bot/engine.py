@@ -864,12 +864,8 @@ def combine_timeframes(
     if mode not in ("safe", "balanced", "momentum"):
         mode = "balanced"
 
-    weights = {
-        "15m": 0.2,
-        "1h": 0.3,
-        "4h": 0.3,
-        "1d": 0.2,
-    }
+    # -------- أوزان الفريمات --------
+    weights = {"15m": 0.2, "1h": 0.3, "4h": 0.3, "1d": 0.2}
 
     score_sum = 0.0
     total_weight = 0.0
@@ -877,7 +873,6 @@ def combine_timeframes(
     bearish_votes = 0.0
 
     max_pump_risk = "LOW"
-
     liq_above_total = 0.0
     liq_below_total = 0.0
 
@@ -938,11 +933,10 @@ def combine_timeframes(
     else:
         base_score = 50.0
 
-    # توافق الاتجاه بين الفريمات
     bull_align = bullish_votes / total_weight if total_weight > 0 else 0.0
     bear_align = bearish_votes / total_weight if total_weight > 0 else 0.0
 
-    # ترند عام
+    # اتجاه عام
     if bullish_votes > bearish_votes:
         global_trend = "BULLISH"
     elif bearish_votes > bullish_votes:
@@ -958,7 +952,7 @@ def combine_timeframes(
     else:
         global_regime = "MIXED"
 
-    # انحياز السيولة الكلي
+    # انحياز السيولة
     if liq_above_total + liq_below_total > 0:
         liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
         if liq_imbalance > 0.2:
@@ -973,7 +967,7 @@ def combine_timeframes(
         liquidity_bias = "FLAT"
         liquidity_score = 0.0
 
-    # RSI من الفريمات العالية
+    # RSI عالي الفريمات
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
     rsi_1d = tf_data.get("1d", {}).get("rsi")
@@ -987,16 +981,12 @@ def combine_timeframes(
     overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
     oversold = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
 
-    # =========================
-    # تعديل السكور الكلاسيكي
-    # =========================
+    # -------- تعديل السكور الكلاسيكي --------
     combined_score = base_score
 
-    # مكافأة السوق الترندي
     if global_regime == "TRENDING":
         combined_score += 3
 
-    # اختراقات
     if global_trend == "BULLISH":
         if breakout_up_weight > 0.15:
             combined_score += 4
@@ -1008,13 +998,11 @@ def combine_timeframes(
         if breakout_up_weight > 0.15:
             combined_score -= 4
 
-    # دايفرجنس ضد الترند
     if global_trend == "BULLISH" and bear_div_weight > 0.15:
         combined_score -= 5
     if global_trend == "BEARISH" and bull_div_weight > 0.15:
         combined_score += 5
 
-    # السيولة مع/ضد الاتجاه
     if liquidity_bias == "UP" and global_trend == "BULLISH":
         combined_score += 3
     elif liquidity_bias == "DOWN" and global_trend == "BULLISH":
@@ -1024,26 +1012,24 @@ def combine_timeframes(
     elif liquidity_bias == "UP" and global_trend == "BEARISH":
         combined_score -= 3
 
-    # =========================
-    # Arkham Smart Money Boost (خفيف وآمن)
-    # =========================
+    # -------- Arkham / Orderbook / Sentiment (نفس منطقك السابق) --------
+    orderbook_bias = "FLAT"
+    orderbook_score = 0.0
+    sentiment_bias = "NEUTRAL"
+    sentiment_strength = 0.0
+
     if arkham_intel:
         try:
             whale_in = float(arkham_intel.get("whale_inflow_score", 0.0) or 0.0)
             whale_out = float(arkham_intel.get("whale_outflow_score", 0.0) or 0.0)
             intel_bias = arkham_intel.get("smart_money_bias", "NEUTRAL")
             intel_conf = arkham_intel.get("intel_confidence", "LOW")
-
-            # وزن الثقة
             intel_weight_map = {"LOW": 0.3, "MEDIUM": 0.7, "HIGH": 1.0}
             intel_weight = intel_weight_map.get(intel_conf, 0.3)
 
-            # فرق دخول/خروج الحيتان
-            raw_delta = (whale_in - whale_out) / 100.0  # يتحول من 0-100 إلى 0-1
-            # تأثير أقصى ±3 نقاط على السكور
+            raw_delta = (whale_in - whale_out) / 100.0
             delta = raw_delta * 3.0 * intel_weight
 
-            # لو البايس عكسي مع الترند نخفف أكثر
             if intel_bias == "UP" and global_trend == "BEARISH":
                 delta *= 0.5
             if intel_bias == "DOWN" and global_trend == "BULLISH":
@@ -1053,50 +1039,32 @@ def combine_timeframes(
         except Exception:
             pass
 
-    # =========================
-    # Orderbook Pressure Boost
-    # =========================
-    orderbook_bias = "FLAT"
-    orderbook_score = 0.0
     if orderbook_intel:
         try:
             orderbook_bias = orderbook_intel.get("bias", "FLAT")
             orderbook_score = float(orderbook_intel.get("score", 0.0) or 0.0)
             ob_intensity = min(orderbook_score / 100.0, 1.0)
-
             delta = 0.0
             if orderbook_bias == "BID":
                 if global_trend == "BULLISH":
-                    # ضغط مشترين مع الترند → دعم قوي
                     delta += 4.0 * ob_intensity
                 elif global_trend == "BEARISH":
-                    # ضغط مشترين ضد الترند → تقليل السلبية شوي
                     delta += 2.0 * ob_intensity
             elif orderbook_bias == "ASK":
                 if global_trend == "BEARISH":
-                    # ضغط بائعين مع الترند → دعم للهبوط
                     delta -= 4.0 * ob_intensity
                 elif global_trend == "BULLISH":
-                    # ضغط بائعين ضد الترند → نكون حذرين من الشراء
                     delta -= 2.0 * ob_intensity
-
             combined_score += delta
         except Exception:
             pass
 
-    # =========================
-    # Binance Sentiment Boost
-    # =========================
-    sentiment_bias = "NEUTRAL"
-    sentiment_strength = 0.0
     if binance_sentiment:
         try:
             sentiment_bias = binance_sentiment.get("bias", "NEUTRAL")
             sentiment_strength = float(binance_sentiment.get("strength", 0.0) or 0.0)
-
             if sentiment_bias != "NEUTRAL" and sentiment_strength > 5:
-                s_intensity = min(sentiment_strength / 50.0, 1.0)  # 0-1
-
+                s_intensity = min(sentiment_strength / 50.0, 1.0)
                 delta = 0.0
                 if sentiment_bias == "LONG":
                     if global_trend == "BULLISH":
@@ -1108,16 +1076,13 @@ def combine_timeframes(
                         delta -= 3.0 * s_intensity
                     elif global_trend == "BULLISH":
                         delta -= 1.5 * s_intensity
-
                 combined_score += delta
         except Exception:
             pass
 
     combined_score = max(0.0, min(100.0, combined_score))
 
-    # =========================
-    # فلتر التمدد عن EMA200 (4H / 1D)
-    # =========================
+    # -------- تمدد عن EMA200 + فلتر حماية --------
     def _extended_side(tf_name: str) -> str:
         data = tf_data.get(tf_name, {})
         c = data.get("close")
@@ -1134,11 +1099,9 @@ def combine_timeframes(
 
     ext_4h = _extended_side("4h")
     ext_1d = _extended_side("1d")
-
     extended_up = (ext_4h == "UP") or (ext_1d == "UP")
     extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
-    # فريم مرجعي قوي (Anchor)
     strong_bull_anchor = (
         tf_data.get("4h", {}).get("trend") == "BULLISH"
         and tf_data.get("4h", {}).get("trend_score", 50) >= 60
@@ -1155,49 +1118,45 @@ def combine_timeframes(
         and tf_data.get("1d", {}).get("trend_score", 50) >= 55
     )
 
-    # ===== فلتر حماية ذكي من الشراء في القمم / البيع في القيعان =====
     safety_block_buy = False
     safety_block_sell = False
 
-    # في momentum نخفف فلتر الحماية قليلاً
-    if mode != "momentum":
-        # ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
+    # في SAFE فقط نفعّل أقوى حماية
+    if mode == "safe":
         if global_trend == "BULLISH" and extended_up and overbought:
             safety_block_buy = True
-
-        # ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
         if global_trend == "BEARISH" and extended_down and oversold:
             safety_block_sell = True
 
-    # =========================
-    # اتخاذ قرار BUY / SELL / WAIT
-    # =========================
-    # thresholds حسب الـ mode
+    # -------- thresholds لكل مود --------
     if mode == "safe":
         buy_score_min = 68.0
+        sell_score_min = 68.0
         buy_align_min = 0.55
-        sell_score_max = 48.0
         sell_align_min = 0.50
         gray_low = 52.0
         gray_high = 65.0
     elif mode == "momentum":
         buy_score_min = 60.0
+        sell_score_min = 60.0
         buy_align_min = 0.40
-        sell_score_max = 55.0
         sell_align_min = 0.40
         gray_low = 48.0
         gray_high = 65.0
     else:  # balanced
         buy_score_min = 65.0
+        sell_score_min = 65.0
         buy_align_min = 0.50
-        sell_score_max = 50.0
         sell_align_min = 0.45
         gray_low = 50.0
         gray_high = 65.0
 
+    # SELL يستخدم "bear_score" (معكوس السكور)
+    bear_score = 100.0 - combined_score
+
     action = "WAIT"
 
-    # شروط BUY
+    # --- BUY ---
     if (
         combined_score >= buy_score_min
         and bull_align >= buy_align_min
@@ -1210,9 +1169,9 @@ def combine_timeframes(
     ):
         action = "BUY"
 
-    # شروط SELL
+    # --- SELL ---
     if (
-        combined_score <= sell_score_max
+        bear_score >= sell_score_min
         and bear_align >= sell_align_min
         and not oversold
         and (
@@ -1222,7 +1181,7 @@ def combine_timeframes(
     ):
         action = "SELL"
 
-    # المنطقة الرمادية
+    # --- المنطقة الرمادية (للطرفين) ---
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
@@ -1237,7 +1196,21 @@ def combine_timeframes(
         ):
             action = "SELL"
 
-    # الثقة
+    # --- Pump Sniper للمومنتوم: فريم 15m ---
+    pump_momentum = False
+    if mode == "momentum" and max_pump_risk != "HIGH":
+        tf15 = tf_data.get("15m", {})
+        if (
+            tf15.get("market_regime") == "TRENDING"
+            and tf15.get("is_breakout_up")
+            and tf15.get("volume_surge")
+            and bull_align >= 0.35
+        ):
+            # حتى لو السكور مو مثالي، نعطي BUY مومنتوم
+            action = "BUY"
+            pump_momentum = True
+
+    # --- الثقة ---
     distance = abs(combined_score - 50.0)
     if distance >= 22:
         confidence = "HIGH"
@@ -1246,7 +1219,7 @@ def combine_timeframes(
     else:
         confidence = "LOW"
 
-    # حماية من Pump/Dump (حتى في momentum ما نسمح HIGH)
+    # حماية من Pump/Dump HIGH
     if max_pump_risk == "HIGH" and action in ("BUY", "SELL"):
         action = "WAIT"
 
@@ -1256,9 +1229,7 @@ def combine_timeframes(
     if safety_block_sell and action == "SELL":
         action = "WAIT"
 
-    # =========================
-    # Grade + No-Trade
-    # =========================
+    # -------- Grade + No-Trade --------
     if (
         combined_score >= 78
         and confidence == "HIGH"
@@ -1278,9 +1249,7 @@ def combine_timeframes(
     else:
         grade = "C"
 
-    # منطق no_trade حسب المود
     no_trade = False
-
     if max_pump_risk == "HIGH":
         no_trade = True
     elif action == "WAIT":
@@ -1292,7 +1261,6 @@ def combine_timeframes(
         if grade == "C" or confidence == "LOW" or liquidity_score < 5:
             no_trade = True
     else:  # momentum
-        # في momentum نسمح حتى B و C بس مع ثقة معقولة وسيولة معقولة
         if confidence == "LOW" or liquidity_score < 3:
             no_trade = True
 
@@ -1308,18 +1276,18 @@ def combine_timeframes(
         "grade": grade,
         "no_trade": no_trade,
         "mode": mode,
-        # معلومات إضافية
         "bull_align": round(float(bull_align), 2),
         "bear_align": round(float(bear_align), 2),
         "safety_block_buy": bool(safety_block_buy),
         "safety_block_sell": bool(safety_block_sell),
-        # Orderbook info
         "orderbook_bias": orderbook_bias,
         "orderbook_score": round(float(orderbook_score), 2),
-        # Binance Sentiment info
         "binance_sentiment_bias": sentiment_bias,
         "binance_sentiment_strength": round(float(sentiment_strength), 2),
+        "pump_momentum": pump_momentum,
+        "bear_score": round(float(bear_score), 2),
     }
+
 
 
 # =========================

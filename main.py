@@ -19,7 +19,8 @@ from bot.handlers import (
     remove_symbol,
     list_watchlist,
     stats,
-    radar,  # <-- أضفناها هنا
+    radar,
+    toggle_mode,
 )
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -52,6 +53,9 @@ if __name__ == "__main__":
 
     # زر تحديث الإشارة
     app.add_handler(CallbackQueryHandler(refresh_signal, pattern=r"^refresh\|"))
+    app.add_handler(CallbackQueryHandler(toggle_mode, pattern=r"^mode\|"))
+
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+

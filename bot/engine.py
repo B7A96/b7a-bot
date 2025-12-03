@@ -185,7 +185,7 @@ def fetch_orderbook(symbol: str, limit: int = 100) -> Dict[str, Any]:
     نستخدمه لقياس ضغط الشراء/البيع (BID/ASK Pressure).
     """
     symbol = _normalize_symbol(symbol)
-    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/depth}"
+    url = f"{BINANCE_SPOT_BASE_URL}/api/v3/depth"
     params = {"symbol": symbol, "limit": limit}
 
     resp = requests.get(url, params=params, timeout=10)
@@ -851,14 +851,19 @@ def combine_timeframes(
     arkham_intel: Optional[Dict[str, Any]] = None,
     orderbook_intel: Optional[Dict[str, Any]] = None,
     binance_sentiment: Optional[Dict[str, Any]] = None,
+    mode: str = "balanced",
 ) -> Dict[str, Any]:
     """
-    دمج الفريمات في قرار واحد (Ultra Filter مطوّر مع:
-    - فلتر حماية من الشراء في القمم والبيع في القيعان
-    - Arkham Smart Money (placeholder)
-    - Orderbook Pressure من Binance
-    - Binance Sentiment كبديل مجاني لـ Coinglass.
+    دمج الفريمات في قرار واحد.
+    يدعم 3 أوضاع:
+      - safe
+      - balanced
+      - momentum
     """
+    mode = (mode or "balanced").lower()
+    if mode not in ("safe", "balanced", "momentum"):
+        mode = "balanced"
+
     weights = {
         "15m": 0.2,
         "1h": 0.3,
@@ -1154,23 +1159,48 @@ def combine_timeframes(
     safety_block_buy = False
     safety_block_sell = False
 
-    # ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
-    if global_trend == "BULLISH" and extended_up and overbought:
-        safety_block_buy = True
+    # في momentum نخفف فلتر الحماية قليلاً
+    if mode != "momentum":
+        # ترند صاعد، السعر متمدد فوق EMA200 + RSI Overbought → تجنب BUY جديد
+        if global_trend == "BULLISH" and extended_up and overbought:
+            safety_block_buy = True
 
-    # ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
-    if global_trend == "BEARISH" and extended_down and oversold:
-        safety_block_sell = True
+        # ترند هابط، السعر متمدد تحت EMA200 + RSI Oversold → تجنب SELL جديد
+        if global_trend == "BEARISH" and extended_down and oversold:
+            safety_block_sell = True
 
     # =========================
-    # اتخاذ قرار BUY / SELL / WAIT  (Balanced Mode)
+    # اتخاذ قرار BUY / SELL / WAIT
     # =========================
+    # thresholds حسب الـ mode
+    if mode == "safe":
+        buy_score_min = 68.0
+        buy_align_min = 0.55
+        sell_score_max = 48.0
+        sell_align_min = 0.50
+        gray_low = 52.0
+        gray_high = 65.0
+    elif mode == "momentum":
+        buy_score_min = 60.0
+        buy_align_min = 0.40
+        sell_score_max = 55.0
+        sell_align_min = 0.40
+        gray_low = 48.0
+        gray_high = 65.0
+    else:  # balanced
+        buy_score_min = 65.0
+        buy_align_min = 0.50
+        sell_score_max = 50.0
+        sell_align_min = 0.45
+        gray_low = 50.0
+        gray_high = 65.0
+
     action = "WAIT"
 
     # شروط BUY
     if (
-        combined_score >= 65.0
-        and bull_align >= 0.50
+        combined_score >= buy_score_min
+        and bull_align >= buy_align_min
         and not overbought
         and max_pump_risk != "HIGH"
         and (
@@ -1180,10 +1210,10 @@ def combine_timeframes(
     ):
         action = "BUY"
 
-    # شروط SELL (تم تبسيطها شوي عشان تبدأ تطلع إشارات SELL فعلية)
+    # شروط SELL
     if (
-        combined_score <= 50.0
-        and bear_align >= 0.45
+        combined_score <= sell_score_max
+        and bear_align >= sell_align_min
         and not oversold
         and (
             strong_bear_anchor
@@ -1193,16 +1223,16 @@ def combine_timeframes(
         action = "SELL"
 
     # المنطقة الرمادية
-    if action == "WAIT" and 50.0 <= combined_score < 65.0 and max_pump_risk != "HIGH":
+    if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
-            and bull_align >= 0.45
+            and bull_align >= max(0.45, buy_align_min - 0.05)
             and (strong_bull_anchor or breakout_up_weight > 0.20)
         ):
             action = "BUY"
         elif (
             liquidity_bias == "DOWN"
-            and bear_align >= 0.45
+            and bear_align >= max(0.45, sell_align_min - 0.05)
             and (strong_bear_anchor or breakout_down_weight > 0.20)
         ):
             action = "SELL"
@@ -1216,7 +1246,7 @@ def combine_timeframes(
     else:
         confidence = "LOW"
 
-    # حماية من Pump/Dump
+    # حماية من Pump/Dump (حتى في momentum ما نسمح HIGH)
     if max_pump_risk == "HIGH" and action in ("BUY", "SELL"):
         action = "WAIT"
 
@@ -1239,7 +1269,7 @@ def combine_timeframes(
     elif (
         combined_score >= 68
         and max_pump_risk != "HIGH"
-               and confidence in ("HIGH", "MEDIUM")
+        and confidence in ("HIGH", "MEDIUM")
         and (bull_align >= 0.50 or bear_align >= 0.50)
     ):
         grade = "A"
@@ -1248,16 +1278,23 @@ def combine_timeframes(
     else:
         grade = "C"
 
+    # منطق no_trade حسب المود
     no_trade = False
 
-    if grade == "C" or confidence == "LOW" or max_pump_risk == "HIGH":
+    if max_pump_risk == "HIGH":
         no_trade = True
-
-    if action == "WAIT":
+    elif action == "WAIT":
         no_trade = True
-
-    if liquidity_score < 5:
-        no_trade = True
+    elif mode == "safe":
+        if grade in ("C",) or confidence == "LOW" or liquidity_score < 8:
+            no_trade = True
+    elif mode == "balanced":
+        if grade == "C" or confidence == "LOW" or liquidity_score < 5:
+            no_trade = True
+    else:  # momentum
+        # في momentum نسمح حتى B و C بس مع ثقة معقولة وسيولة معقولة
+        if confidence == "LOW" or liquidity_score < 3:
+            no_trade = True
 
     return {
         "score": round(float(combined_score), 2),
@@ -1270,6 +1307,7 @@ def combine_timeframes(
         "market_regime": global_regime,
         "grade": grade,
         "no_trade": no_trade,
+        "mode": mode,
         # معلومات إضافية
         "bull_align": round(float(bull_align), 2),
         "bear_align": round(float(bear_align), 2),
@@ -1397,10 +1435,19 @@ def compute_trade_levels_multi(
 # نقطة الدخول الرئيسية
 # =========================
 
-def generate_signal(symbol: str) -> Dict[str, Any]:
+def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
     """
     Main Ultra Engine entrypoint.
+
+    mode:
+      - "safe"
+      - "balanced"
+      - "momentum"
     """
+    mode = (mode or "balanced").lower()
+    if mode not in ("safe", "balanced", "momentum"):
+        mode = "balanced"
+
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
@@ -1460,6 +1507,7 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         arkham_intel=arkham_intel,
         orderbook_intel=orderbook_intel,
         binance_sentiment=binance_sentiment,
+        mode=mode,
     )
 
     # 3.25) تأثير خفيف لـ Coinglass (Open Interest Bias)
@@ -1509,6 +1557,9 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         combined["no_trade"] = True
         combined["action"] = "WAIT"
 
+    # نثبت الـ mode داخل decision
+    combined["mode"] = mode
+
     tp: Optional[float] = None
     sl: Optional[float] = None
     rr: Optional[float] = None
@@ -1534,6 +1585,12 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
         else:
             risk_pct = 1.0
 
+        # تعديل الرسك حسب الـ mode
+        if mode == "safe":
+            risk_pct *= 0.7
+        elif mode == "momentum":
+            risk_pct *= 1.2
+
         # حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
         risk_pct = max(0.5, min(3.0, risk_pct))
@@ -1545,6 +1602,12 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
             reward_mult = 2.0
         else:
             reward_mult = 1.5
+
+        # تعديل الأهداف حسب المود
+        if mode == "safe":
+            reward_mult *= 0.9
+        elif mode == "momentum":
+            reward_mult *= 1.1
 
         reward_pct = risk_pct * reward_mult
 
@@ -1570,6 +1633,8 @@ def generate_signal(symbol: str) -> Dict[str, Any]:
 
     # 4) نص توضيحي ذكي مختصر
     reason_lines: List[str] = []
+
+    reason_lines.append(f"وضع الإشارة الحالي (Mode): {mode.upper()}")
 
     grade = combined.get("grade")
     no_trade = combined.get("no_trade", False)

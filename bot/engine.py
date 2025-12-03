@@ -1507,7 +1507,7 @@ def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
         arkham_intel=arkham_intel,
         orderbook_intel=orderbook_intel,
         binance_sentiment=binance_sentiment,
-        mode=mode,
+        combined["mode"] = mode,
     )
 
     # 3.25) تأثير خفيف لـ Coinglass (Open Interest Bias)
@@ -1784,6 +1784,7 @@ def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
         "coinglass": coinglass,
         "orderbook": orderbook_intel,
         "binance_sentiment": binance_sentiment,
+        "mode": mode,
     }
 
     # تسجيل الصفقات الفعلية فقط

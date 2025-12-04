@@ -1606,6 +1606,7 @@ def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
             symbol_norm=symbol_norm,
             price=price,
             risk_pct=risk_pct,
+            mode=mode,  
         )
 
         sl = levels["sl"]

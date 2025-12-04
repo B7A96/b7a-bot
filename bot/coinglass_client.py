@@ -1,9 +1,16 @@
 import os
+import time
 import requests
 from typing import Dict, Any, Optional, List
 
 COINGLASS_BASE_URL = "https://open-api-v4.coinglass.com"
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY")
+
+# === نظام كاش + تهدئة (Rate Limit Protection) ===
+_COINGLASS_CACHE: Dict[str, Dict[str, Any]] = {}   # per symbol
+_COINGLASS_MIN_INTERVAL = 60.0                     # ثواني بين كل نداء لنفس الزوج
+_COINGLASS_BACKOFF_SECONDS = 300.0                 # لو جتنا Too Many Requests نوقف 5 دقايق
+_COINGLASS_LAST_TOO_MANY: float = 0.0              # آخر وقت صار فيه Too Many Requests
 
 
 class CoinglassError(Exception):
@@ -27,6 +34,7 @@ def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     url = COINGLASS_BASE_URL + path
     resp = requests.get(url, headers=_headers(), params=params or {}, timeout=8)
     if resp.status_code != 200:
+        # لو الخطأ من نوع Rate Limit نوضحها في الرسالة
         raise CoinglassError(f"HTTP {resp.status_code}: {resp.text}")
     data = resp.json()
     if str(data.get("code")) != "0":
@@ -220,37 +228,107 @@ def get_bitcoin_etf_intel() -> Dict[str, Any]:
 # 4) High-level aggregator used by engine.py
 # ============================
 
-def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
-    base = _symbol_base(symbol)
-    print(f"[COINGLASS] called for {base}, KEY_SET = {bool(COINGLASS_API_KEY)}")
+def _neutral_bundle() -> Dict[str, Any]:
+    """نرجع باقة محايدة لما يكون فيه Error أو Rate Limit."""
+    return {
+        "available": False,
+        "open_interest": {
+            "available": False,
+            "oi_usd": None,
+            "oi_change_24h": None,
+            "oi_bias": "NEUTRAL",
+            "error": None,
+        },
+        "futures_status": {"available": False, "listed": None, "raw": None, "error": None},
+        "spot_status": {"available": False, "listed": None, "raw": None, "error": None},
+        "btc_etf": {
+            "available": False,
+            "funds": 0,
+            "trading_count": 0,
+            "halted_count": 0,
+            "error": None,
+        },
+    }
 
+
+def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
+    """
+    واجهة موحدة يستدعيها الـ B7A Ultra Engine.
+    ترجع dict فيه:
+      - open_interest
+      - futures_status
+      - spot_status
+      - btc_etf (لو BTC فقط)
+
+    فيها:
+      - كاش لكل زوج لمدة 60 ثانية
+      - Backoff 5 دقائق لو رجع Too Many Requests
+    """
     if not COINGLASS_API_KEY:
         # ما في مفتاح → نرجع Neutral
-        return {
-            "available": False,
-            "open_interest": {"available": False, "oi_usd": None, "oi_change_24h": None, "oi_bias": "NEUTRAL"},
-            "futures_status": {"available": False, "listed": None, "raw": None},
-            "spot_status": {"available": False, "listed": None, "raw": None},
-            "btc_etf": {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0},
-        }
-
-   
-
+        return _neutral_bundle()
 
     base = _symbol_base(symbol)
+    now = time.time()
 
-    oi = get_open_interest_intel(base)
-    fut = get_futures_supported(base)
-    spot = get_spot_supported(base)
+    # لو قبل شوي جتنا Too Many Requests → نوقف شوي
+    global _COINGLASS_LAST_TOO_MANY
+    if _COINGLASS_LAST_TOO_MANY:
+        if now - _COINGLASS_LAST_TOO_MANY < _COINGLASS_BACKOFF_SECONDS:
+            return _neutral_bundle()
 
-    btc_etf = {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0}
-    if base == "BTC":
-        btc_etf = get_bitcoin_etf_intel()
+    # كاش per symbol
+    cached = _COINGLASS_CACHE.get(base)
+    if cached and now - cached.get("ts", 0) < _COINGLASS_MIN_INTERVAL:
+        return cached["data"]
 
-    return {
-        "available": True,
+    # فعليًا نطلب البيانات
+    try:
+        oi = get_open_interest_intel(base)
+        fut = get_futures_supported(base)
+        spot = get_spot_supported(base)
+        btc_etf = {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0, "error": None}
+        if base == "BTC":
+            btc_etf = get_bitcoin_etf_intel()
+    except CoinglassError as e:
+        # لو صار Error عام → نفحص إذا Rate Limit
+        msg = str(e)
+        if "Too Many Requests" in msg or "429" in msg:
+            _COINGLASS_LAST_TOO_MANY = now
+        bundle = _neutral_bundle()
+        bundle["open_interest"]["error"] = msg
+        return bundle
+
+    # لو أي جزء فيه Too Many Requests نعتبرها كأنها Rate Limit
+    def _has_too_many(d: Dict[str, Any]) -> bool:
+        err = str(d.get("error") or "").lower()
+        return "too many requests" in err or "429" in err
+
+    if any(_has_too_many(x) for x in (oi, fut, spot)):
+        _COINGLASS_LAST_TOO_MANY = now
+        bundle = _neutral_bundle()
+        bundle["open_interest"]["error"] = str(
+            oi.get("error") or fut.get("error") or spot.get("error")
+        )
+        return bundle
+
+    # نعتبر الـ bundle "available" فقط لو فيه شيء فعلي متاح
+    available_flag = any(
+        [
+            oi.get("available"),
+            fut.get("available") and fut.get("listed") is not None,
+            spot.get("available") and spot.get("listed") is not None,
+            btc_etf.get("available"),
+        ]
+    )
+
+    result = {
+        "available": bool(available_flag),
         "open_interest": oi,
         "futures_status": fut,
         "spot_status": spot,
         "btc_etf": btc_etf,
     }
+
+    _COINGLASS_CACHE[base] = {"ts": now, "data": result}
+    return result

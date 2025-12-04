@@ -1299,11 +1299,16 @@ def compute_trade_levels_multi(
     symbol_norm: str,
     price: float,
     risk_pct: float,
+    mode: str = "balanced",
 ) -> Dict[str, Optional[float]]:
     """
     يحسب SL + TP1/TP2/TP3 باستخدام ATR من فريم 1h (ولو فشل → 15m)
-    ويعدل المسافات حسب Grade + Score.
+    ويعدل المسافات حسب Grade + Score + Mode (SAFE / BALANCED / MOMENTUM).
     """
+
+    mode = (mode or "balanced").lower()
+    if mode not in ("safe", "balanced", "momentum"):
+        mode = "balanced"
 
     # نحاول ATR من 1h أولاً
     anchor_tf = "1h"
@@ -1336,11 +1341,9 @@ def compute_trade_levels_multi(
 
     action = decision.get("action")
     grade = decision.get("grade", "C")
-    score = decision.get("score", 50.0)
+    score = float(decision.get("score", 50.0) or 50.0)
 
-    # Multipliers حسب قوة الإشارة
-    base_sl_mult = 1.2
-
+    # === Multipliers الأساسية حسب Grade (قبل المود) ===
     if grade == "A+":
         tp_mults = (1.2, 2.0, 3.0)
         base_sl_mult = 1.3
@@ -1355,12 +1358,29 @@ def compute_trade_levels_multi(
     if score < 70:
         tp_mults = tuple(m * 0.9 for m in tp_mults)
 
-    # مسافة SL = أكبر من ATR * multiplier أو نسبة من السعر
-    sl_dist_atr = atr_value * base_sl_mult
-    sl_dist_pct = price * (risk_pct / 100.0)
-    sl_dist = max(sl_dist_atr, sl_dist_pct)
+    # === تأثير الـ Mode على شكل الصفقة ===
+    # SAFE: SL أوسع، TP أقرب شوي
+    # BALANCED: افتراضي
+    # MOMENTUM: SL أضيق، TP أبعد (أكثر Aggressive)
+    if mode == "safe":
+        sl_mode_factor = 1.3   # SL أبعد
+        tp_mode_factor = 0.85  # TP أقرب
+    elif mode == "momentum":
+        sl_mode_factor = 0.8   # SL أقرب
+        tp_mode_factor = 1.2   # TP أبعد
+    else:  # balanced
+        sl_mode_factor = 1.0
+        tp_mode_factor = 1.0
 
-    tp_dists = [atr_value * m for m in tp_mults]
+    # مسافة SL: نعتمد أكثر على ATR مع تأثير المود
+    sl_dist_atr = atr_value * base_sl_mult * sl_mode_factor
+
+    # ما نبي risk_pct يختفي تمامًا، فنستخدم متوسط بين ATR و نسبة السعر
+    sl_dist_pct = price * (risk_pct / 100.0)
+    sl_dist = max(sl_dist_atr * 0.7 + sl_dist_pct * 0.3, atr_value * 0.5)
+
+    # مسافات TP بناءً على ATR + المود
+    tp_dists = [atr_value * m * tp_mode_factor for m in tp_mults]
 
     if action not in ("BUY", "SELL"):
         return {
@@ -1374,15 +1394,15 @@ def compute_trade_levels_multi(
         }
 
     if action == "BUY":
-        sl = round(price - sl_dist, 4)
-        tp1 = round(price + tp_dists[0], 4)
-        tp2 = round(price + tp_dists[1], 4)
-        tp3 = round(price + tp_dists[2], 4)
+        sl = round(price - sl_dist, 6)
+        tp1 = round(price + tp_dists[0], 6)
+        tp2 = round(price + tp_dists[1], 6)
+        tp3 = round(price + tp_dists[2], 6)
     else:  # SELL
-        sl = round(price + sl_dist, 4)
-        tp1 = round(price - tp_dists[0], 4)
-        tp2 = round(price - tp_dists[1], 4)
-        tp3 = round(price - tp_dists[2], 4)
+        sl = round(price + sl_dist, 6)
+        tp1 = round(price - tp_dists[0], 6)
+        tp2 = round(price - tp_dists[1], 6)
+        tp3 = round(price - tp_dists[2], 6)
 
     rr1 = round(tp_dists[0] / sl_dist, 2) if sl_dist > 0 else None
     rr2 = round(tp_dists[1] / sl_dist, 2) if sl_dist > 0 else None
@@ -1397,6 +1417,7 @@ def compute_trade_levels_multi(
         "rr2": rr2,
         "rr3": rr3,
     }
+
 
 
 # =========================

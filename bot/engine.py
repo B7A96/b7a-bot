@@ -1468,6 +1468,7 @@ def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
     # 1.5) Coinglass Intel (من coinglass_client.py)
     try:
         coinglass = get_coinglass_intel(symbol_norm)
+        print(">>> COINGLASS DEBUG:", coinglass)
     except Exception:
         coinglass = None
 

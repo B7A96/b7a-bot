@@ -221,14 +221,9 @@ def get_bitcoin_etf_intel() -> Dict[str, Any]:
 # ============================
 
 def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
-    """
-    واجهة موحدة يستدعيها الـ B7A Ultra Engine.
-    ترجع dict فيه:
-      - open_interest
-      - futures_status
-      - spot_status
-      - btc_etf (لو BTC فقط)
-    """
+    base = _symbol_base(symbol)
+    print(f"[COINGLASS] called for {base}, KEY_SET = {bool(COINGLASS_API_KEY)}")
+
     if not COINGLASS_API_KEY:
         # ما في مفتاح → نرجع Neutral
         return {
@@ -238,6 +233,9 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
             "spot_status": {"available": False, "listed": None, "raw": None},
             "btc_etf": {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0},
         }
+
+   
+
 
     base = _symbol_base(symbol)
 

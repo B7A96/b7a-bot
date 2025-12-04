@@ -1131,7 +1131,7 @@ def combine_timeframes(
     # -------- thresholds لكل مود --------
     if mode == "safe":
         buy_score_min = 68.0
-        sell_score_min = 45.0
+        sell_score_min = 60.0   # قوة بيع أعلى شوي
         buy_align_min = 0.55
         sell_align_min = 0.50
         gray_low = 52.0
@@ -1145,13 +1145,14 @@ def combine_timeframes(
         gray_high = 65.0
     else:  # balanced
         buy_score_min = 65.0
-        sell_score_min = 50.0
+        sell_score_min = 58.0
         buy_align_min = 0.50
         sell_align_min = 0.45
         gray_low = 50.0
         gray_high = 65.0
 
     # SELL يستخدم "bear_score" (معكوس السكور)
+    # مثال: لو combined_score = 40 → bear_score = 60 (بيع قوي)
     bear_score = 100.0 - combined_score
 
     action = "WAIT"
@@ -1170,9 +1171,8 @@ def combine_timeframes(
         action = "BUY"
 
     # --- SELL ---
-    # --- SELL ---
     if (
-        combined_score <= sell_score_max
+        bear_score >= sell_score_min          # هنا استخدمنا bear_score بدل sell_score_max
         and bear_align >= sell_align_min
         and not oversold
         and (
@@ -1181,6 +1181,7 @@ def combine_timeframes(
         )
     ):
         action = "SELL"
+
 
 
     # --- المنطقة الرمادية (للطرفين) ---

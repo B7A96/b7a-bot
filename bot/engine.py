@@ -1131,21 +1131,21 @@ def combine_timeframes(
     # -------- thresholds لكل مود --------
     if mode == "safe":
         buy_score_min = 68.0
-        sell_score_min = 68.0
+        sell_score_min = 45.0
         buy_align_min = 0.55
         sell_align_min = 0.50
         gray_low = 52.0
         gray_high = 65.0
     elif mode == "momentum":
         buy_score_min = 60.0
-        sell_score_min = 60.0
+        sell_score_min = 55.0
         buy_align_min = 0.40
         sell_align_min = 0.40
         gray_low = 48.0
         gray_high = 65.0
     else:  # balanced
         buy_score_min = 65.0
-        sell_score_min = 65.0
+        sell_score_min = 50.0
         buy_align_min = 0.50
         sell_align_min = 0.45
         gray_low = 50.0
@@ -1170,8 +1170,9 @@ def combine_timeframes(
         action = "BUY"
 
     # --- SELL ---
+    # --- SELL ---
     if (
-        bear_score >= sell_score_min
+        combined_score <= sell_score_max
         and bear_align >= sell_align_min
         and not oversold
         and (
@@ -1180,6 +1181,7 @@ def combine_timeframes(
         )
     ):
         action = "SELL"
+
 
     # --- المنطقة الرمادية (للطرفين) ---
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
@@ -1285,8 +1287,9 @@ def combine_timeframes(
         "binance_sentiment_bias": sentiment_bias,
         "binance_sentiment_strength": round(float(sentiment_strength), 2),
         "pump_momentum": pump_momentum,
-        "bear_score": round(float(bear_score), 2),
+        "bear_score": round(float(100.0 - combined_score), 2),
     }
+
 
 
 

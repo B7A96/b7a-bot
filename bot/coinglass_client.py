@@ -1,21 +1,72 @@
 import os
 import time
-import requests
+from collections import deque
 from typing import Dict, Any, Optional, List
 
 COINGLASS_BASE_URL = "https://open-api-v4.coinglass.com"
 COINGLASS_API_KEY = os.getenv("COINGLASS_API_KEY")
 
-# === نظام كاش + تهدئة (Rate Limit Protection) ===
-_COINGLASS_CACHE: Dict[str, Dict[str, Any]] = {}   # per symbol
-_COINGLASS_MIN_INTERVAL = 60.0                     # ثواني بين كل نداء لنفس الزوج
-_COINGLASS_BACKOFF_SECONDS = 300.0                 # لو جتنا Too Many Requests نوقف 5 دقايق
-_COINGLASS_LAST_TOO_MANY: float = 0.0              # آخر وقت صار فيه Too Many Requests
-
 
 class CoinglassError(Exception):
     pass
 
+
+# =========================
+# Rate Limit + Cache
+# =========================
+
+# Coinglass Hobbyist → 30 request/min
+# نخلي حدّنا الداخلي أقل شوي (25) عشان نكون بأمان
+_RATE_WINDOW_SEC = 60.0
+_RATE_LIMIT_PER_WINDOW = 25
+
+# نخزن timestamps لكل request فعلي نرسله
+_REQUEST_TIMES = deque(maxlen=300)  # نحتفظ بـ 5 دقائق تقريباً
+
+# Cache بسيط في الذاكرة: key → {"ts": float, "value": any}
+_CACHE: Dict[str, Dict[str, Any]] = {}
+# الـ TTL الافتراضي (لأغلب الدوال)
+_DEFAULT_TTL = 45.0  # ثواني
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _should_rate_limit() -> bool:
+    """يشوف كم request سوّينا في آخر دقيقة."""
+    now = _now()
+    # نشيل القديم
+    while _REQUEST_TIMES and (now - _REQUEST_TIMES[0] > _RATE_WINDOW_SEC):
+        _REQUEST_TIMES.popleft()
+
+    return len(_REQUEST_TIMES) >= _RATE_LIMIT_PER_WINDOW
+
+
+def _register_request():
+    """نسجّل request جديد في العدّاد."""
+    _REQUEST_TIMES.append(_now())
+
+
+def _cache_get(key: str, ttl: float = _DEFAULT_TTL):
+    """يرجع من الكاش لو لسه داخل الـ TTL."""
+    entry = _CACHE.get(key)
+    if not entry:
+        return None
+    if _now() - entry["ts"] > ttl:
+        # انتهت صلاحية الكاش
+        _CACHE.pop(key, None)
+        return None
+    return entry["value"]
+
+
+def _cache_set(key: str, value: Any):
+    _CACHE[key] = {"ts": _now(), "value": value}
+
+
+# =========================
+# Helpers
+# =========================
 
 def _headers() -> Dict[str, str]:
     if not COINGLASS_API_KEY:
@@ -29,16 +80,38 @@ def _headers() -> Dict[str, str]:
 def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Helper بسيط للنداء على Coinglass V4.
-    يرفع CoinglassError لو صار HTTP error أو code != "0".
+    يرفع CoinglassError لو صار:
+      - HTTP error
+      - code != "0"
+      - أو ضربنا rate limit (محلي أو من Coinglass)
     """
+    if _should_rate_limit():
+        # نمنع ourselves قبل ما Coinglass يزعل
+        raise CoinglassError("Local Coinglass rate limit reached; skipping request for now")
+
+    import requests  # نخليه local عشان لو أحد يستخدم الملف بدون requests
+
     url = COINGLASS_BASE_URL + path
+    _register_request()
     resp = requests.get(url, headers=_headers(), params=params or {}, timeout=8)
+
+    # لو Coinglass رجّع rate limit/400
+    if resp.status_code in (429, 403):
+        raise CoinglassError(f"HTTP {resp.status_code}: Rate limit from Coinglass")
+
     if resp.status_code != 200:
-        # لو الخطأ من نوع Rate Limit نوضحها في الرسالة
         raise CoinglassError(f"HTTP {resp.status_code}: {resp.text}")
+
     data = resp.json()
-    if str(data.get("code")) != "0":
+    # Coinglass-style errors
+    code = str(data.get("code"))
+    if code != "0":
+        msg = str(data.get("msg", "")).lower()
+        if "too many" in msg and "request" in msg:
+            # نترجمها لرسالة أوضح
+            raise CoinglassError("Coinglass error: Too Many Requests (remote rate limit)")
         raise CoinglassError(f"Coinglass error: {data}")
+
     return data
 
 
@@ -52,10 +125,10 @@ def _symbol_base(symbol: str) -> str:
     return s
 
 
-# ============================
+# =========================
 # 1) Futures Open Interest
 #    /api/futures/open-interest/exchange-list
-# ============================
+# =========================
 
 def get_open_interest_intel(symbol: str) -> Dict[str, Any]:
     """
@@ -67,26 +140,35 @@ def get_open_interest_intel(symbol: str) -> Dict[str, Any]:
       - oi_bias       : LEVERAGE_UP / LEVERAGE_DOWN / NEUTRAL
     """
     base = _symbol_base(symbol)
+    cache_key = f"oi:{base}"
+    cached = _cache_get(cache_key, ttl=45.0)
+    if cached is not None:
+        return cached
+
     try:
         data = _get("/api/futures/open-interest/exchange-list", params={"symbol": base})
     except CoinglassError as e:
-        return {
+        result = {
             "available": False,
             "error": str(e),
             "oi_usd": None,
             "oi_change_24h": None,
             "oi_bias": "NEUTRAL",
         }
+        _cache_set(cache_key, result)
+        return result
 
     items: List[Dict[str, Any]] = data.get("data") or []
     if not isinstance(items, list) or not items:
-        return {
+        result = {
             "available": False,
             "error": None,
             "oi_usd": None,
             "oi_change_24h": None,
             "oi_bias": "NEUTRAL",
         }
+        _cache_set(cache_key, result)
+        return result
 
     # نفضّل صف "All" لو موجود (كل المنصات)
     row: Dict[str, Any] = items[0]
@@ -121,20 +203,22 @@ def get_open_interest_intel(symbol: str) -> Dict[str, Any]:
     else:
         oi_bias = "NEUTRAL"
 
-    return {
+    result = {
         "available": True,
         "error": None,
         "oi_usd": oi_usd,
         "oi_change_24h": oi_change_24h,
         "oi_bias": oi_bias,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
-# ============================
+# =========================
 # 2) Supported Coins (Futures / Spot)
 #    /api/futures/supported-coins
 #    /api/spot/supported-coins
-# ============================
+# =========================
 
 def _lookup_supported(symbol: str, market: str) -> Dict[str, Any]:
     """
@@ -142,6 +226,13 @@ def _lookup_supported(symbol: str, market: str) -> Dict[str, Any]:
     نستخدمه مرة لكل تحليل (ما نحرق الـ rate-limit).
     """
     base = _symbol_base(symbol)
+    cache_key = f"{market}_supported:{base}"
+
+    # هذي المعلومة ما تتغير كثير → TTL أطول (10 دقائق)
+    cached = _cache_get(cache_key, ttl=600.0)
+    if cached is not None:
+        return cached
+
     if market == "futures":
         path = "/api/futures/supported-coins"
     elif market == "spot":
@@ -152,7 +243,9 @@ def _lookup_supported(symbol: str, market: str) -> Dict[str, Any]:
     try:
         data = _get(path)
     except CoinglassError as e:
-        return {"available": False, "error": str(e), "listed": None, "raw": None}
+        result = {"available": False, "error": str(e), "listed": None, "raw": None}
+        _cache_set(cache_key, result)
+        return result
 
     items: List[Dict[str, Any]] = data.get("data") or []
     if not isinstance(items, list):
@@ -165,12 +258,14 @@ def _lookup_supported(symbol: str, market: str) -> Dict[str, Any]:
             found = it
             break
 
-    return {
+    result = {
         "available": True,
         "error": None,
         "listed": found is not None,
         "raw": found,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
 def get_futures_supported(symbol: str) -> Dict[str, Any]:
@@ -181,26 +276,34 @@ def get_spot_supported(symbol: str) -> Dict[str, Any]:
     return _lookup_supported(symbol, "spot")
 
 
-# ============================
+# =========================
 # 3) Bitcoin ETF List
 #    /api/etf/bitcoin/list
-# ============================
+# =========================
 
 def get_bitcoin_etf_intel() -> Dict[str, Any]:
     """
     Bitcoin ETF intel (متاح حتى لـ Hobbyist).
     نستخدمه فقط لما يكون الزوج BTCUSDT كـ Sentiment مؤسسات.
     """
+    cache_key = "btc_etf"
+    # بيانات ETF برضه ما تتغير كل ثانية → نخلي TTL 5 دقايق
+    cached = _cache_get(cache_key, ttl=300.0)
+    if cached is not None:
+        return cached
+
     try:
         data = _get("/api/etf/bitcoin/list")
     except CoinglassError as e:
-        return {
+        result = {
             "available": False,
             "error": str(e),
             "funds": 0,
             "trading_count": 0,
             "halted_count": 0,
         }
+        _cache_set(cache_key, result)
+        return result
 
     items: List[Dict[str, Any]] = data.get("data") or []
     if not isinstance(items, list):
@@ -215,41 +318,20 @@ def get_bitcoin_etf_intel() -> Dict[str, Any]:
         elif "halt" in status or "closed" in status or "suspend" in status:
             halted += 1
 
-    return {
+    result = {
         "available": True,
         "error": None,
         "funds": len(items),
         "trading_count": trading,
         "halted_count": halted,
     }
+    _cache_set(cache_key, result)
+    return result
 
 
-# ============================
+# =========================
 # 4) High-level aggregator used by engine.py
-# ============================
-
-def _neutral_bundle() -> Dict[str, Any]:
-    """نرجع باقة محايدة لما يكون فيه Error أو Rate Limit."""
-    return {
-        "available": False,
-        "open_interest": {
-            "available": False,
-            "oi_usd": None,
-            "oi_change_24h": None,
-            "oi_bias": "NEUTRAL",
-            "error": None,
-        },
-        "futures_status": {"available": False, "listed": None, "raw": None, "error": None},
-        "spot_status": {"available": False, "listed": None, "raw": None, "error": None},
-        "btc_etf": {
-            "available": False,
-            "funds": 0,
-            "trading_count": 0,
-            "halted_count": 0,
-            "error": None,
-        },
-    }
-
+# =========================
 
 def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
     """
@@ -259,76 +341,31 @@ def get_coinglass_intel(symbol: str) -> Dict[str, Any]:
       - futures_status
       - spot_status
       - btc_etf (لو BTC فقط)
-
-    فيها:
-      - كاش لكل زوج لمدة 60 ثانية
-      - Backoff 5 دقائق لو رجع Too Many Requests
     """
     if not COINGLASS_API_KEY:
         # ما في مفتاح → نرجع Neutral
-        return _neutral_bundle()
+        return {
+            "available": False,
+            "open_interest": {"available": False, "oi_usd": None, "oi_change_24h": None, "oi_bias": "NEUTRAL"},
+            "futures_status": {"available": False, "listed": None, "raw": None},
+            "spot_status": {"available": False, "listed": None, "raw": None},
+            "btc_etf": {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0},
+        }
 
     base = _symbol_base(symbol)
-    now = time.time()
 
-    # لو قبل شوي جتنا Too Many Requests → نوقف شوي
-    global _COINGLASS_LAST_TOO_MANY
-    if _COINGLASS_LAST_TOO_MANY:
-        if now - _COINGLASS_LAST_TOO_MANY < _COINGLASS_BACKOFF_SECONDS:
-            return _neutral_bundle()
+    oi = get_open_interest_intel(base)
+    fut = get_futures_supported(base)
+    spot = get_spot_supported(base)
 
-    # كاش per symbol
-    cached = _COINGLASS_CACHE.get(base)
-    if cached and now - cached.get("ts", 0) < _COINGLASS_MIN_INTERVAL:
-        return cached["data"]
+    btc_etf = {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0}
+    if base == "BTC":
+        btc_etf = get_bitcoin_etf_intel()
 
-    # فعليًا نطلب البيانات
-    try:
-        oi = get_open_interest_intel(base)
-        fut = get_futures_supported(base)
-        spot = get_spot_supported(base)
-        btc_etf = {"available": False, "funds": 0, "trading_count": 0, "halted_count": 0, "error": None}
-        if base == "BTC":
-            btc_etf = get_bitcoin_etf_intel()
-    except CoinglassError as e:
-        # لو صار Error عام → نفحص إذا Rate Limit
-        msg = str(e)
-        if "Too Many Requests" in msg or "429" in msg:
-            _COINGLASS_LAST_TOO_MANY = now
-        bundle = _neutral_bundle()
-        bundle["open_interest"]["error"] = msg
-        return bundle
-
-    # لو أي جزء فيه Too Many Requests نعتبرها كأنها Rate Limit
-    def _has_too_many(d: Dict[str, Any]) -> bool:
-        err = str(d.get("error") or "").lower()
-        return "too many requests" in err or "429" in err
-
-    if any(_has_too_many(x) for x in (oi, fut, spot)):
-        _COINGLASS_LAST_TOO_MANY = now
-        bundle = _neutral_bundle()
-        bundle["open_interest"]["error"] = str(
-            oi.get("error") or fut.get("error") or spot.get("error")
-        )
-        return bundle
-
-    # نعتبر الـ bundle "available" فقط لو فيه شيء فعلي متاح
-    available_flag = any(
-        [
-            oi.get("available"),
-            fut.get("available") and fut.get("listed") is not None,
-            spot.get("available") and spot.get("listed") is not None,
-            btc_etf.get("available"),
-        ]
-    )
-
-    result = {
-        "available": bool(available_flag),
+    return {
+        "available": True,
         "open_interest": oi,
         "futures_status": fut,
         "spot_status": spot,
         "btc_etf": btc_etf,
     }
-
-    _COINGLASS_CACHE[base] = {"ts": now, "data": result}
-    return result

@@ -1474,11 +1474,16 @@ def generate_signal(
         binance_sentiment = None
 
     # 1.5) Coinglass Intel (من coinglass_client.py)
-    try:
-        coinglass = get_coinglass_intel(symbol_norm)
-        print(">>> COINGLASS DEBUG:", coinglass)
-    except Exception:
-        coinglass = None
+    # 1.5) Coinglass Intel (من coinglass_client.py)
+    coinglass = None
+    if use_coinglass:
+        try:
+            coinglass = get_coinglass_intel(symbol_norm)
+            print(">>> COINGLASS DEBUG:", coinglass)
+        except Exception as e:
+            print("Coinglass error:", e)
+            coinglass = None
+
 
     # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():

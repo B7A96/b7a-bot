@@ -271,7 +271,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        signal_data = generate_signal(symbol, mode=mode)
+        signal_data = generate_signal(symbol, mode=mode, use_coinglass=True)
     except TypeError:
         await update.message.reply_text(
             "⚠️ لازم نحدّث engine.generate_signal عشان يدعم mode.\n"
@@ -327,7 +327,7 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = get_current_mode(context)
 
     try:
-        signal_data = generate_signal(symbol, mode=mode)
+         signal_data = generate_signal(symbol, mode=mode, use_coinglass=True)
     except Exception as e:
         print("Refresh error:", e)
         await query.edit_message_text(
@@ -384,7 +384,7 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_current_mode(context, new_mode)
 
     try:
-        signal_data = generate_signal(symbol, mode=new_mode)
+        signal_data = generate_signal(symbol, mode=new_mode, use_coinglass=True)
     except Exception as e:
         print("Toggle mode error:", e)
         await query.edit_message_text(
@@ -433,7 +433,7 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     for symbol in symbols:
         try:
-            data = generate_signal(symbol, mode=mode)
+            data = generate_signal(symbol, mode=mode, use_coinglass=False)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -478,7 +478,7 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     for symbol in sorted(WATCHLIST):
         try:
-            data = generate_signal(symbol, mode=mode)
+            data = generate_signal(symbol, mode=mode, use_coinglass=False)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -524,7 +524,7 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for symbol in symbols:
         try:
-            data = generate_signal(symbol, mode=mode)
+            data = generate_signal(symbol, mode=mode, use_coinglass=False)
             decision = data.get("decision", {})
             action = decision.get("action", "WAIT")
             score = decision.get("score", 50)
@@ -536,7 +536,7 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # تحليل BTC كقائد للسوق
     try:
-        btc_data = generate_signal("BTC", mode=mode)
+        btc_data = generate_signal("BTC", mode=mode, use_coinglass=True)
         btc_decision = btc_data.get("decision", {})
     except Exception:
         btc_decision = {}
@@ -637,7 +637,7 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = []
     for symbol in symbols:
         try:
-            data = generate_signal(symbol, mode=mode)
+            data = generate_signal(symbol, mode=mode, use_coinglass=False)
             decision = data.get("decision", {})
             grade = decision.get("grade", "C")
             no_trade = decision.get("no_trade", False)

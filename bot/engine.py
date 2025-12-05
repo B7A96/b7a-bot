@@ -1012,7 +1012,7 @@ def combine_timeframes(
     elif liquidity_bias == "UP" and global_trend == "BEARISH":
         combined_score -= 3
 
-    # -------- Arkham / Orderbook / Sentiment (نفس منطقك السابق) --------
+    # -------- Arkham / Orderbook / Sentiment --------
     orderbook_bias = "FLAT"
     orderbook_score = 0.0
     sentiment_bias = "NEUTRAL"
@@ -1131,29 +1131,33 @@ def combine_timeframes(
     # -------- thresholds لكل مود --------
     if mode == "safe":
         buy_score_min = 68.0
-        sell_score_min = 60.0   # قوة بيع أعلى شوي
+        # نخفف شرط البيع قليلاً عشان يعطي إشارات SELL أوضح
+        sell_score_min = 58.0
         buy_align_min = 0.55
-        sell_align_min = 0.50
+        sell_align_min = 0.48
         gray_low = 52.0
         gray_high = 65.0
     elif mode == "momentum":
         buy_score_min = 60.0
-        sell_score_min = 55.0
+        sell_score_min = 50.0
         buy_align_min = 0.40
-        sell_align_min = 0.40
+        sell_align_min = 0.38
         gray_low = 48.0
         gray_high = 65.0
     else:  # balanced
         buy_score_min = 65.0
-        sell_score_min = 58.0
+        sell_score_min = 55.0
         buy_align_min = 0.50
-        sell_align_min = 0.45
+        sell_align_min = 0.43
         gray_low = 50.0
         gray_high = 65.0
 
-    # SELL يستخدم "bear_score" (معكوس السكور)
-    # مثال: لو combined_score = 40 → bear_score = 60 (بيع قوي)
-    bear_score = 100.0 - combined_score
+    # SELL يستخدم "bear_score" (معكوس السكور) + وزن لمحاذاة الفريمات الهابطة
+    raw_bear_score = 100.0 - combined_score
+    bear_score = raw_bear_score + bear_align * 20.0
+
+    # في البيع نمنع oversold فقط لو الاتجاه العام مو هابط
+    sell_oversold_block = oversold and global_trend != "BEARISH"
 
     action = "WAIT"
 
@@ -1172,17 +1176,15 @@ def combine_timeframes(
 
     # --- SELL ---
     if (
-        bear_score >= sell_score_min          # هنا استخدمنا bear_score بدل sell_score_max
+        bear_score >= sell_score_min
         and bear_align >= sell_align_min
-        and not oversold
+        and not sell_oversold_block
         and (
             strong_bear_anchor
             or (global_trend == "BEARISH" and liquidity_bias in ("DOWN", "FLAT"))
         )
     ):
         action = "SELL"
-
-
 
     # --- المنطقة الرمادية (للطرفين) ---
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
@@ -1196,6 +1198,7 @@ def combine_timeframes(
             liquidity_bias == "DOWN"
             and bear_align >= max(0.45, sell_align_min - 0.05)
             and (strong_bear_anchor or breakout_down_weight > 0.20)
+            and not sell_oversold_block
         ):
             action = "SELL"
 
@@ -1288,7 +1291,7 @@ def combine_timeframes(
         "binance_sentiment_bias": sentiment_bias,
         "binance_sentiment_strength": round(float(sentiment_strength), 2),
         "pump_momentum": pump_momentum,
-        "bear_score": round(float(100.0 - combined_score), 2),
+        "bear_score": round(float(raw_bear_score), 2),
     }
 
 

@@ -1431,7 +1431,12 @@ def compute_trade_levels_multi(
 # نقطة الدخول الرئيسية
 # =========================
 
-def generate_signal(symbol: str, mode: str = "balanced") -> Dict[str, Any]:
+def generate_signal(
+    symbol: str,
+    mode: str = "balanced",
+    use_coinglass: bool = True,
+) -> Dict[str, Any]:
+
     """
     Main Ultra Engine entrypoint.
 

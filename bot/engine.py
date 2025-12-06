@@ -1568,9 +1568,16 @@ def generate_signal(
         mode=mode,
     )
 
-    # 3.25) تأثير Coinglass (Open Interest Bias) على Long/Short
+    # 3.25) تأثير Coinglass (OI + Funding + Liquidations) على Long/Short
     if coinglass and coinglass.get("available"):
         try:
+            def _adj(key: str, delta: float):
+                if key in combined and abs(delta) > 0:
+                    combined[key] = max(
+                        0.0, min(100.0, combined.get(key, 50.0) + delta)
+                    )
+
+            # (A) Open Interest Bias – نفس منطقك الحالي
             oi = (coinglass or {}).get("open_interest") or {}
             oi_bias = oi.get("oi_bias", "NEUTRAL")
             oi_chg = oi.get("oi_change_24h")
@@ -1587,13 +1594,6 @@ def generate_signal(
                 delta_short += 4.0
                 delta_long -= 2.0
 
-
-            def _adj(key: str, delta: float):
-                if key in combined and abs(delta) > 0:
-                    combined[key] = max(
-                        0.0, min(100.0, combined.get(key, 50.0) + delta)
-                    )
-
             # تعديل Long/Short منفصل
             _adj("long_score", delta_long)
             _adj("short_score", delta_short)
@@ -1606,11 +1606,51 @@ def generate_signal(
                 overall_delta = delta_short
             else:
                 overall_delta = (delta_long + delta_short) / 2.0
-
             _adj("score", overall_delta)
+
+            # (B) Funding Rate Filter – Anti-Squeeze
+            funding = (coinglass or {}).get("funding") or {}
+            f_rate = funding.get("rate")
+            f_severity = funding.get("severity")  # LOW / MEDIUM / HIGH / EXTREME
+
+            if f_rate is not None and f_severity:
+                if f_severity == "EXTREME" and mode != "momentum":
+                    # تمويل متطرف → نتفادى الصفقة بالكامل في safe/balanced
+                    combined["no_trade"] = True
+                elif f_severity in ("HIGH", "MEDIUM"):
+                    # لو تمويل موجب عالي → لونغات مزدحمة → نضعف BUY
+                    if f_rate > 0:
+                        _adj("long_score", -3.0)
+                        if combined.get("action") == "BUY":
+                            _adj("score", -2.0)
+                    # لو تمويل سالب عالي → شورتات مزدحمة → نضعف SELL
+                    elif f_rate < 0:
+                        _adj("short_score", -3.0)
+                        if combined.get("action") == "SELL":
+                            _adj("score", -2.0)
+
+            # (C) Liquidation Intel – Washout Awareness
+            liq = (coinglass or {}).get("liquidation") or {}
+            liq_bias = liq.get("bias")          # LONG_WASHOUT / SHORT_WASHOUT / ...
+            liq_intensity = float(liq.get("intensity") or 0.0)
+            liq_intensity = max(0.0, min(1.0, liq_intensity))
+
+            if liq_bias and liq_intensity > 0:
+                # لو كان فيه Long Washout قوي → نتجنب بيع متأخر (نضعف SELL)
+                if liq_bias == "LONG_WASHOUT":
+                    _adj("short_score", -4.0 * liq_intensity)
+                    if combined.get("action") == "SELL":
+                        _adj("score", -3.0 * liq_intensity)
+
+                # لو Short Washout قوي → نتجنب شراء متأخر (نضعف BUY)
+                elif liq_bias == "SHORT_WASHOUT":
+                    _adj("long_score", -4.0 * liq_intensity)
+                    if combined.get("action") == "BUY":
+                        _adj("score", -3.0 * liq_intensity)
 
         except Exception as e:
             print("Coinglass impact error:", e)
+
 
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق

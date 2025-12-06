@@ -81,9 +81,8 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     last_price = signal_data.get("last_price")
     reason = signal_data.get("reason", "")
 
-    # عناصر القرار
     action = decision.get("action", "WAIT")
-    score = decision.get("score", 50.0) or 50.0
+    score = decision.get("score", signal_data.get("score", 50.0)) or 50.0
     trend = decision.get("trend") or signal_data.get("trend", "RANGING")
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk") or signal_data.get("pump_dump_risk", "LOW")
@@ -94,7 +93,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     grade = decision.get("grade", "C")
 
-    # مستويات السعر
     sl = signal_data.get("sl")
     tp = signal_data.get("tp")
     tp1 = signal_data.get("tp1")
@@ -111,9 +109,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
 
     lines: List[str] = []
 
-    # =========================
-    # الهيدر
-    # =========================
+    # Header
     lines.append(f"⚜️ <b>B7A Ultra Signal – {symbol_text}USDT</b>")
     if last_price is not None:
         lines.append(f"💰 السعر الحالي: <b>{last_price}</b> USDT")
@@ -121,9 +117,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     lines.append(f"🌍 وضع السوق العام: <b>{market_regime}</b>")
     lines.append("")
 
-    # =========================
-    # قرار النظام
-    # =========================
+    # Decision
     lines.append("<b>🎯 قرار النظام</b>")
     lines.append(f"• Action: <b>{action}</b>")
     lines.append(f"• Score: <b>{score:.1f}/100</b>")
@@ -131,9 +125,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     lines.append(f"• Confidence: <b>{confidence}</b>")
     lines.append(f"• Pump/Dump Risk: <b>{pump_risk}</b>")
 
-    # =========================
-    # خطة الصفقة (Multi-TP)
-    # =========================
+    # خطة الصفقة
     lines.append("")
     lines.append("<b>📌 خطة الصفقة</b>")
 
@@ -144,7 +136,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
         if sl is not None:
             lines.append(f"• وقف الخسارة (SL): <b>{sl}</b>")
 
-        # Multi-TP
         if tp1 is not None:
             rr1_text = f" (R:R ≈ {rr1})" if rr1 is not None else ""
             lines.append(f"• TP1: <b>{tp1}</b>{rr1_text}")
@@ -164,11 +155,9 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
                 f"هدف ربح تقديري: <b>{reward_pct:.1f}%</b>"
             )
     else:
-        lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade</b>.")
+        lines.append("• لا توجد مستويات دخول واضحة – <b>No-Trade Zone</b>.")
 
-    # =========================
     # السيولة
-    # =========================
     lines.append("")
     lines.append("<b>💧 السيولة (Liquidity)</b>")
     try:
@@ -178,9 +167,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
     except Exception:
         lines.append(f"• Bias: <b>{liquidity_bias}</b>")
 
-    # =========================
-    # ملخص الفريمات
-    # =========================
+    # الفريمات
     if tf_data:
         lines.append("")
         lines.append("<b>🧠 ملخص الفريمات</b>")
@@ -196,9 +183,6 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol_fallback: str) -> 
                 f"• {tf} | Trend: <b>{tf_trend}</b> | Score: <b>{tf_score:.0f}</b> | Regime: <b>{tf_regime}</b>"
             )
 
-    # =========================
-    # السبب النصي
-    # =========================
     if reason:
         lines.append("")
         lines.append("<b>📝 لماذا أعطى البوت هذه الإشارة؟</b>")
@@ -263,7 +247,6 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     symbol = _normalize_symbol(context.args[0])
-
     mode = _get_current_mode(context)
 
     try:
@@ -277,6 +260,8 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += _build_debug_block(signal_data, mode)
 
     tv_symbol = signal_data.get("symbol", symbol)
+    tv_symbol_usdt = tv_symbol if tv_symbol.endswith("USDT") else tv_symbol + "USDT"
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol_usdt}"
 
     keyboard = [
         [
@@ -287,6 +272,10 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(
                 "🔄 Refresh",
                 callback_data=f"refresh|{tv_symbol}",
+            ),
+            InlineKeyboardButton(
+                "📊 فتح الشارت",
+                url=tv_url,
             ),
         ]
     ]
@@ -323,6 +312,8 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += _build_debug_block(signal_data, mode)
 
     tv_symbol = signal_data.get("symbol", symbol)
+    tv_symbol_usdt = tv_symbol if tv_symbol.endswith("USDT") else tv_symbol + "USDT"
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol_usdt}"
 
     keyboard = [
         [
@@ -333,6 +324,10 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(
                 "🔄 Refresh",
                 callback_data=f"refresh|{tv_symbol}",
+            ),
+            InlineKeyboardButton(
+                "📊 فتح الشارت",
+                url=tv_url,
             ),
         ]
     ]
@@ -378,6 +373,8 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += _build_debug_block(signal_data, new_mode)
 
     tv_symbol = signal_data.get("symbol", symbol)
+    tv_symbol_usdt = tv_symbol if tv_symbol.endswith("USDT") else tv_symbol + "USDT"
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol_usdt}"
 
     keyboard = [
         [
@@ -388,6 +385,10 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(
                 "🔄 Refresh",
                 callback_data=f"refresh|{tv_symbol}",
+            ),
+            InlineKeyboardButton(
+                "📊 فتح الشارت",
+                url=tv_url,
             ),
         ]
     ]
@@ -422,7 +423,9 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         decision = data.get("decision", {})
         action = decision.get("action", "WAIT")
-        if action in ("BUY", "SELL"):
+        no_trade = decision.get("no_trade") or data.get("no_trade", False)
+
+        if action in ("BUY", "SELL") and not no_trade:
             candidates.append(
                 {
                     "symbol": data.get("symbol", sym),
@@ -438,10 +441,9 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     if not candidates:
-        await update.message.reply_text("ما في فرص قوية حالياً – أغلب السوق WAIT.")
+        await update.message.reply_text("ما في فرص قوية حالياً – أغلب السوق WAIT أو No-Trade.")
         return
 
-    # ترتيب حسب السكور
     candidates.sort(key=lambda x: x["score"], reverse=True)
     top = candidates[:10]
 
@@ -481,7 +483,9 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         decision = data.get("decision", {})
         action = decision.get("action", "WAIT")
-        if action in ("BUY", "SELL"):
+        no_trade = decision.get("no_trade") or data.get("no_trade", False)
+
+        if action in ("BUY", "SELL") and not no_trade:
             candidates.append(
                 {
                     "symbol": data.get("symbol", sym),
@@ -497,7 +501,7 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     if not candidates:
-        await update.message.reply_text("ما في فرص قوية حالياً في قائمة المراقبة.")
+        await update.message.reply_text("ما في فرص قوية حالياً في قائمة المراقبة – إما WAIT أو No-Trade.")
         return
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -523,7 +527,6 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """رادار موحّد يعرض أفضل الفرص لونغ + شورت معاً."""
-
     mode = _get_current_mode(context)
     await update.message.reply_text(f"📡 تشغيل الرادار ({mode}) ...")
 
@@ -545,7 +548,9 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         decision = data.get("decision", {})
         action = decision.get("action", "WAIT")
-        if action not in ("BUY", "SELL"):
+        no_trade = decision.get("no_trade") or data.get("no_trade", False)
+
+        if action not in ("BUY", "SELL") or no_trade:
             continue
 
         entry = {
@@ -561,13 +566,13 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action == "BUY":
             long_candidates.append(entry)
-        elif action == "SELL":
+        else:
             short_candidates.append(entry)
 
     lines: List[str] = []
 
     if not long_candidates and not short_candidates:
-        await update.message.reply_text("ما في فرص قوية حالياً – الكل تقريباً WAIT.")
+        await update.message.reply_text("ما في فرص مكتملة حالياً – الكل تقريباً WAIT أو No-Trade.")
         return
 
     if long_candidates:
@@ -616,7 +621,8 @@ async def radar_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         decision = data.get("decision", {})
         action = decision.get("action", "WAIT")
-        if action != "BUY":
+        no_trade = decision.get("no_trade") or data.get("no_trade", False)
+        if action != "BUY" or no_trade:
             continue
 
         score = decision.get("score", data.get("score", 0.0))
@@ -633,7 +639,7 @@ async def radar_long(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     if not candidates:
-        await update.message.reply_text("😕 لا توجد فرص BUY قوية حالياً.")
+        await update.message.reply_text("😕 لا توجد فرص BUY قوية مكتملة حالياً.")
         return
 
     candidates.sort(key=lambda x: x["score"], reverse=True)
@@ -671,7 +677,8 @@ async def radar_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         decision = data.get("decision", {})
         action = decision.get("action", "WAIT")
-        if action != "SELL":
+        no_trade = decision.get("no_trade") or data.get("no_trade", False)
+        if action != "SELL" or no_trade:
             continue
 
         short_score = data.get("short_score")
@@ -688,7 +695,7 @@ async def radar_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     if not candidates:
-        await update.message.reply_text("😕 لا توجد فرص SELL قوية حالياً.")
+        await update.message.reply_text("😕 لا توجد فرص SELL قوية مكتملة حالياً.")
         return
 
     candidates.sort(key=lambda x: x["short_score"], reverse=True)
@@ -708,10 +715,8 @@ async def radar_short(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تقرير يومي مبسط + أفضل 3 فرص."""
-
     mode = _get_current_mode(context)
 
-    # تحليل BTC كمرجع للسوق
     try:
         btc_data = generate_signal("BTC", mode=mode.lower(), use_coinglass=True)
     except Exception as e:
@@ -724,7 +729,6 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btc_action = btc_decision.get("action", "WAIT")
     btc_score = btc_decision.get("score", btc_data.get("score", 50.0))
 
-    # مسح سريع لبعض العملات
     try:
         symbols = get_top_usdt_symbols(limit=40)
     except Exception as e:
@@ -739,8 +743,9 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         dec = d.get("decision", {})
         act = dec.get("action", "WAIT")
+        no_trade = dec.get("no_trade") or d.get("no_trade", False)
         score = dec.get("score", d.get("score", 0.0))
-        if act in ("BUY", "SELL") and score >= 65:
+        if act in ("BUY", "SELL") and score >= 65 and not no_trade:
             results.append((sym, act, score, dec))
 
     msg_lines: List[str] = []
@@ -760,7 +765,7 @@ async def daily(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• {symbol}: {action} | Grade: {grade} | Score: {score:.0f} | Trend: {trend}"
             )
     else:
-        msg_lines.append("ما في فرص قوية جداً اليوم حسب الفلتر الحالي (الكل تقريباً WAIT).")
+        msg_lines.append("ما في فرص قوية جداً اليوم حسب الفلتر الحالي (الكل تقريباً WAIT أو No-Trade).")
 
     msg_lines.append("")
     msg_lines.append("تقدر تستخدم /signal BTC لأي عملة تبي تشوف تحليلها بالتفصيل.")

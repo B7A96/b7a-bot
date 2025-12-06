@@ -275,22 +275,29 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tv_symbol_usdt = tv_symbol if tv_symbol.endswith("USDT") else tv_symbol + "USDT"
     tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{tv_symbol_usdt}"
 
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                f"⚙️ Mode: {mode}",
-                callback_data=f"mode|{tv_symbol}",
-            ),
-            InlineKeyboardButton(
-                "🔄 Refresh",
-                callback_data=f"refresh|{tv_symbol}",
-            ),
-            InlineKeyboardButton(
-                "📊 فتح الشارت",
-                url=tv_url,
-            ),
-        ]
-    ]
+keyboard = [
+    [
+        InlineKeyboardButton(
+            f"⚙️ Mode: {mode}",
+            callback_data=f"mode|{tv_symbol}",
+        ),
+        InlineKeyboardButton(
+            "🔄 Refresh",
+            callback_data=f"refresh|{tv_symbol}",
+        ),
+        InlineKeyboardButton(
+            "📊 فتح الشارت",
+            url=tv_url,
+        ),
+    ],
+    [
+        InlineKeyboardButton(
+            "🧠 تحليل مفصل",
+            callback_data=f"analysis|{tv_symbol}",
+        ),
+    ],
+]
+
 
     await update.message.reply_text(
         msg,

@@ -1164,23 +1164,27 @@ def combine_timeframes(
 
     # -------- thresholds لكل مود (مبنية على Long/Short) --------
     if mode == "safe":
-        long_min = 70.0           # لونغ قوي فقط
-        short_min = 82.0          # شورت نادر جداً
+        # SAFE = لونغ محافظ جداً، شورت نادر فقط في ترند هابط قوي
+        long_min = 70.0
+        short_min = 80.0
         gray_low = 52.0
         gray_high = 70.0
     elif mode == "momentum":
+        # MOMENTUM = هجومي، نفتح الباب للونغ/شورت مومنتوم
         long_min = 58.0
-        short_min = 60.0
+        short_min = 58.0
         gray_low = 48.0
         gray_high = 70.0
     else:  # balanced
+        # BALANCED = توازن حقيقي بين لونغ وشورت
         long_min = 65.0
-        short_min = 68.0
+        short_min = 60.0
         gray_low = 50.0
         gray_high = 70.0
 
+
     # إدارة overbought/oversold حسب ترند السوق
-    sell_oversold_block = oversold and global_trend != "BEARISH"
+    sell_oversold_block = oversold and global_trend != "BULLISH"
     buy_overbought_block = overbought and global_trend != "BULLISH"
 
     action = "WAIT"
@@ -1203,7 +1207,7 @@ def combine_timeframes(
     if (
         short_score >= short_min
         and short_score > long_score
-        and bear_align >= 0.40
+        and bear_align >= 0.30
         and not sell_oversold_block
         and (
             strong_bear_anchor
@@ -1211,6 +1215,7 @@ def combine_timeframes(
         )
     ):
         action = "SELL"
+
 
     # --- المنطقة الرمادية (للطرفين) ---
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
@@ -1223,11 +1228,12 @@ def combine_timeframes(
             action = "BUY"
         elif (
             liquidity_bias == "DOWN"
-            and bear_align >= max(0.45, 0.40)
+            and bear_align >= max(0.40, 0.30)
             and not sell_oversold_block
             and (strong_bear_anchor or breakout_down_weight > 0.20)
         ):
             action = "SELL"
+
 
     # --- Pump Sniper للمومنتوم: فريم 15m ---
     pump_momentum = False
@@ -1577,9 +1583,10 @@ def generate_signal(
                 delta_long += 2.0
                 delta_short -= 2.0
             elif oi_bias == "LEVERAGE_DOWN" and oi_chg is not None and oi_chg < 0:
-                # رافعة لأسفل → تدعم الشورت وتضعف اللونغ
-                delta_short += 2.0
+                # رافعة لأسفل → تدعم الشورت وتضعف اللونغ (نقوّي أثرها أكثر)
+                delta_short += 4.0
                 delta_long -= 2.0
+
 
             def _adj(key: str, delta: float):
                 if key in combined and abs(delta) > 0:

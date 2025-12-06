@@ -33,30 +33,44 @@ def _get_current_mode(context: ContextTypes.DEFAULT_TYPE) -> str:
 # 2) Start Command
 # ==========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "مرحباً بك في 🤖 B7A Ultra X Bot\n\n"
-        "أنا بوت تحليل ذكي متعدد الفريمات للكريبتو.\n"
-        "استخدم /help لعرض الأوامر.",
+    text = (
+        "👑 مرحباً بك في <b>B7A Ultra X Bot</b>\n\n"
+        "أنا بوت تحليل ذكي متعدد الفريمات للكريبتو "
+        "(Trend + Liquidity + Coinglass Intel).\n\n"
+        "أهم الأوامر اللي تقدر تبدأ فيها الآن:\n"
+        "• <b>/signal BTC</b> – إشارة تفصيلية مع SL/TP وزر تحليل مفصل\n"
+        "• <b>/radar</b> – رادار لأقوى فرص السوق الحالية\n"
+        "• <b>/scan</b> – مسح لأعلى عملات USDT من حيث الفوليوم\n"
+        "• <b>/help</b> – عرض جميع الأوامر المتاحة\n"
     )
+    await update.message.reply_text(text, parse_mode="HTML")
+
 
 
 # ==========================
 # 3) Help Command
 # ==========================
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🧾 أوامر البوت:\n"
-        "/price BTC — عرض السعر الحالي\n"
-        "/signal BTC — إشارة تفصيلية (مع زر تحليل مفصل)\n"
-        "/scan — مسح أقوى العملات\n"
-        "/scan_watchlist — مسح قائمة المراقبة\n"
-        "/radar — رادار الفرص\n"
-        "/daily — ملخص يومي\n"
-        "/add BTC — إضافة إلى المراقبة\n"
-        "/remove BTC — إزالة من المراقبة\n"
-        "/list — عرض قائمة المراقبة\n"
-        "/stats — ملخص الإشارات\n"
+    text = (
+        "🧾 <b>قائمة أوامر B7A Ultra X Bot</b>\n\n"
+        "💰 <b>الأسعار والإشارات</b>\n"
+        "• <b>/price BTC</b> – عرض السعر الحالي\n"
+        "• <b>/signal BTC</b> – إشارة تفصيلية (مع زر 🧠 تحليل مفصل)\n\n"
+        "📡 <b>مسح السوق</b>\n"
+        "• <b>/scan</b> – مسح أقوى العملات من حيث الفوليوم\n"
+        "• <b>/scan_watchlist</b> – مسح قائمة المراقبة فقط\n"
+        "• <b>/radar</b> – رادار الفرص (Top BUY و SELL)\n"
+        "• <b>/daily</b> – ملخص يومي لأكبر الرابحين والخاسرين\n\n"
+        "👀 <b>قائمة المراقبة</b>\n"
+        "• <b>/add BTC</b> – إضافة عملة إلى قائمة المراقبة\n"
+        "• <b>/remove BTC</b> – إزالة عملة من قائمة المراقبة\n"
+        "• <b>/list</b> – عرض قائمة المراقبة الحالية\n\n"
+        "📊 <b>الإحصائيات والتدريب</b>\n"
+        "• <b>/stats</b> – ملخص أداء الصفقات (باستخدام /win و /loss)\n"
+        "• <b>/win BTC</b> – تسجيل صفقة رابحة لعملة\n"
+        "• <b>/loss BTC</b> – تسجيل صفقة خاسرة لعملة\n"
     )
+    await update.message.reply_text(text, parse_mode="HTML")
 
 
 # ==========================
@@ -87,32 +101,34 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     decision = signal_data.get("decision", {})
     last_price = signal_data.get("last_price")
-    mode = signal_data.get("mode")
+    mode = signal_data.get("mode", "balanced")
 
     action = decision.get("action", "WAIT")
-    score = decision.get("score", 50.0)
+    score = float(decision.get("score", 50.0) or 50.0)
     trend = decision.get("trend", "RANGING")
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk", "LOW")
 
-    # SL/TP
-    sl = decision.get("sl")
-    tp1 = decision.get("tp1")
-    tp2 = decision.get("tp2")
-    tp3 = decision.get("tp3")
+    # ✅ SL/TP من الـ signal_data نفسِه (هنا كان الخطأ)
+    sl = signal_data.get("sl")
+    tp1 = signal_data.get("tp1")
+    tp2 = signal_data.get("tp2")
+    tp3 = signal_data.get("tp3")
 
     grade = decision.get("grade", "C")
 
-    msg = []
+    msg: List[str] = []
     msg.append(f"🏅 <b>B7A Ultra Signal – {symbol.upper()}</b>")
     if last_price:
         msg.append(f"💰 السعر الحالي: <b>{last_price}</b> USDT")
 
     msg.append(f"🏆 Grade: <b>{grade}</b>")
     msg.append(f"🌍 وضع السوق العام: <b>{trend}</b>")
+    # ⚙️ إظهار المود بشكل واضح
+    msg.append(f"⚙️ Mode: <b>{str(mode).upper()}</b>")
+
     msg.append("")
     msg.append("📬 <b>قرار النظام</b>")
-
     msg.append(f"• Action: <b>{action}</b>")
     msg.append(f"• Score: <b>{score:.1f}/100</b>")
     msg.append(f"• Trend: <b>{trend}</b>")
@@ -122,21 +138,20 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     msg.append("")
     msg.append("📌 <b>خطة الصفقة</b>")
     msg.append(f"• نوع الصفقة: <b>{action}</b>")
-    if sl:
+    if sl is not None:
         msg.append(f"• SL (وقف الخسارة): <b>{sl}</b>")
-    if tp1:
+    if tp1 is not None:
         msg.append(f"• TP1: {tp1}")
-    if tp2:
+    if tp2 is not None:
         msg.append(f"• TP2: {tp2}")
-    if tp3:
+    if tp3 is not None:
         msg.append(f"• TP3: {tp3}")
 
     msg.append("")
     msg.append("⚠️ هذا تحليل آلي — استخدم إدارة مخاطر صارمة.")
-    msg.append("")
-    msg.append("— X: @B7Acrypto")
 
     return "\n".join(msg)
+
 
 
 # =================================================
@@ -302,7 +317,13 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = _get_current_mode(context)
     symbols = get_top_volume_symbols(limit=40)
 
-    result = []
+    # ⏳ رسالة انتظار أولية
+    waiting = await update.message.reply_text(
+        "⏳ جاري تشغيل B7A Ultra Radar للبحث عن أقوى فرص BUY / SELL...",
+        parse_mode="HTML",
+    )
+
+    result: List[str] = []
     result.append("🎯 <b>B7A Ultra Radar</b>\n")
 
     data = scan_market(symbols, mode=mode)
@@ -320,7 +341,7 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )[:5]
 
     if buys:
-        result.append("🔵 أفضل فرص BUY:\n")
+        result.append("🟢 أفضل فرص BUY:\n")
         for item in buys:
             sym = item["symbol"]
             sdata = item["signal"]["decision"]
@@ -337,9 +358,12 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"• {sym}: SELL | Grade: {sdata.get('grade')} | Score: {sdata.get('score'):.0f}"
             )
 
-    await update.message.reply_text(
-        "\n".join(result), parse_mode="HTML"
-    )
+    if not buys and not sells:
+        result.append("لا توجد فرص واضحة حالياً حسب شروط B7A Ultra.")
+
+    # نعدّل رسالة الانتظار بالنتيجة النهائية بدل نرسل رسالة جديدة
+    await waiting.edit_text("\n".join(result), parse_mode="HTML")
+
 
 
 # =================================================
@@ -348,9 +372,16 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mode = _get_current_mode(context)
     symbols = get_top_volume_symbols(limit=30)
+
+    # ⏳ رسالة انتظار فورية
+    waiting = await update.message.reply_text(
+        "⏳ جاري فحص أعلى عملات USDT من حيث الفوليوم...",
+        parse_mode="HTML",
+    )
+
     results = scan_market(symbols, mode=mode)
 
-    msg = ["🔍 فحص أعلى عملات USDT من حيث الفوليوم...\n"]
+    msg: List[str] = ["🔍 فحص أعلى عملات USDT من حيث الفوليوم...\n"]
 
     for item in results[:10]:
         sym = item["symbol"]
@@ -360,7 +391,11 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Score: {dec.get('score'):.0f}"
         )
 
-    await update.message.reply_text("\n".join(msg), parse_mode="HTML")
+    if len(msg) == 1:
+        msg.append("لا توجد بيانات كافية حالياً.")
+
+    await waiting.edit_text("\n".join(msg), parse_mode="HTML")
+
 
 
 # =================================================

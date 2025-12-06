@@ -49,9 +49,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("daily", daily))
     app.add_handler(CommandHandler("radar", radar))
 
-    # رادارات منفصلة للـ Long و Short
-    app.add_handler(CommandHandler("radar_long", radar_long))
-    app.add_handler(CommandHandler("radar_short", radar_short))
 
     # إدارة قائمة المراقبة
     app.add_handler(CommandHandler("add", add_symbol))
@@ -67,3 +64,4 @@ if __name__ == "__main__":
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+

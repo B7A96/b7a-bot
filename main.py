@@ -23,6 +23,8 @@ from bot.handlers import (
     radar_long,      # 🔵 رادار لونغ
     radar_short,     # 🔴 رادار شورت
     toggle_mode,
+    mark_win,
+    mark_loss,
 )
 
 # متغير التوكن من البيئة
@@ -58,10 +60,16 @@ if __name__ == "__main__":
     # الإحصائيات
     app.add_handler(CommandHandler("stats", stats))
 
+    # تعليم نتيجة الصفقة
+    app.add_handler(CommandHandler("win", mark_win))
+    app.add_handler(CommandHandler("loss", mark_loss))
+
+
     # أزرار الإشارة (Refresh + Mode)
     app.add_handler(CallbackQueryHandler(refresh_signal, pattern=r"^refresh\|"))
     app.add_handler(CallbackQueryHandler(toggle_mode, pattern=r"^mode\|"))
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+
 

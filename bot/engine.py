@@ -1128,44 +1128,69 @@ def combine_timeframes(
         if global_trend == "BEARISH" and extended_down and oversold:
             safety_block_sell = True
 
-    # -------- thresholds لكل مود --------
+    # -------- بناء LongScore / ShortScore من السكور الكلي + المحاذاة --------
+    long_score = combined_score
+    short_score = 100.0 - combined_score  # مبدئياً معكوس السكور
+
+    # تعزيز/تضعيف حسب محاذاة الفريمات
+    long_score += bull_align * 20.0
+    long_score -= bear_align * 10.0
+    short_score += bear_align * 20.0
+    short_score -= bull_align * 10.0
+
+    # تأثير الترند العام
+    if global_trend == "BULLISH":
+        long_score += 5.0
+        short_score -= 3.0
+    elif global_trend == "BEARISH":
+        short_score += 5.0
+        long_score -= 3.0
+
+    # تأثير انحياز السيولة
+    if liquidity_bias == "UP":
+        long_score += 3.0
+    elif liquidity_bias == "DOWN":
+        short_score += 3.0
+
+    # حماية من تمدد مبالغ فيه عن EMA200 (طمع زائد)
+    if extended_up and overbought:
+        long_score -= 8.0
+    if extended_down and oversold:
+        short_score -= 8.0
+
+    # Clip داخل 0-100
+    long_score = max(0.0, min(100.0, long_score))
+    short_score = max(0.0, min(100.0, short_score))
+
+    # -------- thresholds لكل مود (مبنية على Long/Short) --------
     if mode == "safe":
-        buy_score_min = 68.0
-        # نخفف شرط البيع قليلاً عشان يعطي إشارات SELL أوضح
-        sell_score_min = 58.0
-        buy_align_min = 0.55
-        sell_align_min = 0.48
+        long_min = 70.0           # لونغ قوي فقط
+        short_min = 82.0          # شورت نادر جداً
         gray_low = 52.0
-        gray_high = 65.0
+        gray_high = 70.0
     elif mode == "momentum":
-        buy_score_min = 60.0
-        sell_score_min = 50.0
-        buy_align_min = 0.40
-        sell_align_min = 0.38
+        long_min = 58.0
+        short_min = 60.0
         gray_low = 48.0
-        gray_high = 65.0
+        gray_high = 70.0
     else:  # balanced
-        buy_score_min = 65.0
-        sell_score_min = 55.0
-        buy_align_min = 0.50
-        sell_align_min = 0.43
+        long_min = 65.0
+        short_min = 68.0
         gray_low = 50.0
-        gray_high = 65.0
+        gray_high = 70.0
 
-    # SELL يستخدم "bear_score" (معكوس السكور) + وزن لمحاذاة الفريمات الهابطة
-    raw_bear_score = 100.0 - combined_score
-    bear_score = raw_bear_score + bear_align * 20.0
-
-    # في البيع نمنع oversold فقط لو الاتجاه العام مو هابط
+    # إدارة overbought/oversold حسب ترند السوق
     sell_oversold_block = oversold and global_trend != "BEARISH"
+    buy_overbought_block = overbought and global_trend != "BULLISH"
 
     action = "WAIT"
 
-    # --- BUY ---
+    # --- BUY مبني على LongScore ---
     if (
-        combined_score >= buy_score_min
-        and bull_align >= buy_align_min
-        and not overbought
+        long_score >= long_min
+        and long_score >= short_score
+        and bull_align >= 0.40
+        and not buy_overbought_block
         and max_pump_risk != "HIGH"
         and (
             strong_bull_anchor
@@ -1174,10 +1199,11 @@ def combine_timeframes(
     ):
         action = "BUY"
 
-    # --- SELL ---
+    # --- SELL مبني على ShortScore ---
     if (
-        bear_score >= sell_score_min
-        and bear_align >= sell_align_min
+        short_score >= short_min
+        and short_score > long_score
+        and bear_align >= 0.40
         and not sell_oversold_block
         and (
             strong_bear_anchor
@@ -1190,17 +1216,33 @@ def combine_timeframes(
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
-            and bull_align >= max(0.45, buy_align_min - 0.05)
+            and bull_align >= max(0.45, 0.40)
+            and not buy_overbought_block
             and (strong_bull_anchor or breakout_up_weight > 0.20)
         ):
             action = "BUY"
         elif (
             liquidity_bias == "DOWN"
-            and bear_align >= max(0.45, sell_align_min - 0.05)
-            and (strong_bear_anchor or breakout_down_weight > 0.20)
+            and bear_align >= max(0.45, 0.40)
             and not sell_oversold_block
+            and (strong_bear_anchor or breakout_down_weight > 0.20)
         ):
             action = "SELL"
+
+    # --- Pump Sniper للمومنتوم: فريم 15m ---
+    pump_momentum = False
+    if mode == "momentum" and max_pump_risk != "HIGH":
+        tf15 = tf_data.get("15m", {})
+        if (
+            tf15.get("market_regime") == "TRENDING"
+            and tf15.get("is_breakout_up")
+            and tf15.get("volume_surge")
+            and bull_align >= 0.35
+        ):
+            # حتى لو السكور مو مثالي، نعطي BUY مومنتوم
+            action = "BUY"
+            pump_momentum = True
+
 
     # --- Pump Sniper للمومنتوم: فريم 15m ---
     pump_momentum = False
@@ -1291,8 +1333,11 @@ def combine_timeframes(
         "binance_sentiment_bias": sentiment_bias,
         "binance_sentiment_strength": round(float(sentiment_strength), 2),
         "pump_momentum": pump_momentum,
-        "bear_score": round(float(raw_bear_score), 2),
+        "bear_score": round(float(short_score), 2),
+        "long_score": round(float(long_score), 2),
+        "short_score": round(float(short_score), 2),
     }
+
 
 
 
@@ -1517,31 +1562,49 @@ def generate_signal(
         mode=mode,
     )
 
-    # 3.25) تأثير خفيف لـ Coinglass (Open Interest Bias)
+    # 3.25) تأثير Coinglass (Open Interest Bias) على Long/Short
     if coinglass and coinglass.get("available"):
         try:
             oi = (coinglass or {}).get("open_interest") or {}
             oi_bias = oi.get("oi_bias", "NEUTRAL")
             oi_chg = oi.get("oi_change_24h")
 
-            delta = 0.0
+            delta_long = 0.0
+            delta_short = 0.0
 
-            if oi_bias == "LEVERAGE_UP" and oi_chg is not None:
-                if combined["action"] == "BUY":
-                    delta += 2.0
-                elif combined["action"] == "SELL":
-                    delta -= 2.0
-            elif oi_bias == "LEVERAGE_DOWN" and oi_chg is not None:
-                if combined["action"] == "SELL":
-                    delta += 2.0
-                elif combined["action"] == "BUY":
-                    delta -= 2.0
+            if oi_bias == "LEVERAGE_UP" and oi_chg is not None and oi_chg > 0:
+                # رافعة لأعلى → تدعم اللونغ وتضعف الشورت
+                delta_long += 2.0
+                delta_short -= 2.0
+            elif oi_bias == "LEVERAGE_DOWN" and oi_chg is not None and oi_chg < 0:
+                # رافعة لأسفل → تدعم الشورت وتضعف اللونغ
+                delta_short += 2.0
+                delta_long -= 2.0
 
-            combined["score"] = max(
-                0.0, min(100.0, combined.get("score", 50.0) + delta)
-            )
+            def _adj(key: str, delta: float):
+                if key in combined and abs(delta) > 0:
+                    combined[key] = max(
+                        0.0, min(100.0, combined.get(key, 50.0) + delta)
+                    )
+
+            # تعديل Long/Short منفصل
+            _adj("long_score", delta_long)
+            _adj("short_score", delta_short)
+
+            # score العام يميل مع الجهة الغالبة/القرار الحالي
+            act = combined.get("action")
+            if act == "BUY":
+                overall_delta = delta_long
+            elif act == "SELL":
+                overall_delta = delta_short
+            else:
+                overall_delta = (delta_long + delta_short) / 2.0
+
+            _adj("score", overall_delta)
+
         except Exception as e:
             print("Coinglass impact error:", e)
+
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
     try:

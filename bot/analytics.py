@@ -255,3 +255,42 @@ def performance_intel(symbol: str, decision: Dict[str, Any]) -> Dict[str, Any]:
         "force_no_trade": bool(force_no_trade),
         "note": note,
     }
+    
+# =========================
+# B7A Trade Result Trainer
+# =========================
+
+def mark_last_trade(symbol: str, result: str) -> bool:
+    """
+    يعلّم النظام نتيجة آخر صفقة على رمز معيّن (WIN / LOSS).
+
+    symbol: مثل "BTCUSDT"
+    result: "WIN" أو "LOSS"
+    """
+    rows = _read_trades()
+    if not rows:
+        return False
+
+    symbol = (symbol or "").upper()
+    target_idx = None
+
+    # نبحث من آخر صف إلى أول صف عن آخر صفقة لنفس الرمز
+    for i in range(len(rows) - 1, -1, -1):
+        row = rows[i]
+        if str(row.get("symbol", "")).upper() == symbol:
+            target_idx = i
+            break
+
+    if target_idx is None:
+        return False
+
+    rows[target_idx]["result"] = result.upper()
+
+    # نعيد كتابة الملف بالكامل مع التعديل
+    fieldnames = list(rows[0].keys())
+    with open(LOG_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    return True

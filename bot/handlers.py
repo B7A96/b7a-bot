@@ -34,15 +34,31 @@ def _get_current_mode(context: ContextTypes.DEFAULT_TYPE) -> str:
 # ==========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "👑 مرحباً بك في <b>B7A Ultra X Bot</b>\n\n"
-        "أنا بوت تحليل ذكي متعدد الفريمات للكريبتو "
-        "(Trend + Liquidity + Coinglass Intel).\n\n"
-        "أهم الأوامر اللي تقدر تبدأ فيها الآن:\n"
-        "• <b>/signal BTC</b> – إشارة تفصيلية مع SL/TP وزر تحليل مفصل\n"
-        "• <b>/radar</b> – رادار لأقوى فرص السوق الحالية\n"
-        "• <b>/scan</b> – مسح لأعلى عملات USDT من حيث الفوليوم\n"
-        "• <b>/help</b> – عرض جميع الأوامر المتاحة\n"
+        "👑 <b>مرحباً بك في B7A Ultra Bot</b>\n"
+        "أقوى نظام تحليلات ذكي للكريبتو – مبني على محرك متعدد الفريمات + سيولة + مؤشرات احترافية.\n\n"
+
+        "⚡ <b>ماذا يقدم لك البوت؟</b>\n"
+        "• تحليل فوري لأي عملة (Multi-Timeframe Engine)\n"
+        "• كشف اتجاه السوق العام والاتجاهات المخفية\n"
+        "• خطة دخول كاملة: SL / TP / R:R\n"
+        "• رادار ذكي لاكتشاف أفضل فرص BUY و SELL\n"
+        "• فحص أعلى عملات USDT من حيث الفوليوم\n"
+        "• دعم Coinglass (Open Interest / Funding / Liquidations)\n\n"
+
+        "🛠 <b>اختر أسلوب التداول الخاص بك:</b>\n"
+        "• BALANCED – أكثر وضع متزن\n"
+        "• SAFE – أقل مخاطرة\n"
+        "• MOMENTUM – بحث عن الانفجارات\n\n"
+
+        "💡 <b>ابدأ الآن:</b>\n"
+        "اكتب:\n"
+        "• <b>/signal BTC</b> لتحليل عملة محددة\n"
+        "• <b>/radar</b> لأقوى الفرص الآن\n"
+        "• <b>/scan</b> لفحص عملات السوق\n\n"
+
+        "📘 لا تعرف الأوامر؟ استخدم <b>/help</b>\n"
     )
+
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -52,7 +68,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==========================
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "🧾 <b>قائمة أوامر B7A Ultra X Bot</b>\n\n"
+        "🧾 <b>قائمة أوامر B7A Ultra Bot</b>\n\n"
         "💰 <b>الأسعار والإشارات</b>\n"
         "• <b>/price BTC</b> – عرض السعر الحالي\n"
         "• <b>/signal BTC</b> – إشارة تفصيلية (مع زر 🧠 تحليل مفصل)\n\n"
@@ -499,18 +515,62 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 16) Mode Toggle
 # =================================================
 async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    زر Mode داخل إشارة /signal:
+    - يغيّر المود (BALANCED / MOMENTUM / SAFE)
+    - يعيد بناء نفس رسالة الإشارة بالمود الجديد
+    - بدون إرسال رسالة جديدة منفصلة
+    """
     query = update.callback_query
     await query.answer()
 
+    # callback_data شكلها:  "mode|BTC"
+    _, symbol = query.data.split("|")
+    symbol_norm = _normalize_symbol(symbol)
+
+    # المود الحالي من chat_data
     current = _get_current_mode(context)
     modes = ["balanced", "momentum", "safe"]
 
     idx = modes.index(current)
     new_mode = modes[(idx + 1) % len(modes)]
 
+    # نخزن المود الجديد في الشات
     context.chat_data["mode"] = new_mode
 
-    await query.message.reply_text(f"تم تغيير الوضع إلى: {new_mode.upper()}")
+    # نرجع نبني الإشارة بالمود الجديد (مع Coinglass)
+    signal_data = generate_signal(symbol_norm, mode=new_mode, use_coinglass=True)
+    text = _build_signal_message(signal_data, symbol_norm)
+
+    # نحدّث الأزرار ونغيّر اسم الزر إلى المود الجديد
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}USDT"
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"⚙️ Mode: {new_mode}",
+                callback_data=f"mode|{symbol_norm}",
+            ),
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data=f"refresh|{symbol_norm}",
+            ),
+            InlineKeyboardButton("📊 فتح الشارت", url=tv_url),
+        ],
+        [
+            InlineKeyboardButton(
+                "🧠 تحليل مفصل",
+                callback_data=f"analysis|{symbol_norm}",
+            )
+        ],
+    ]
+
+    # نعدّل نفس رسالة الإشارة بدل ما نرسل رسالة جديدة
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
 
 
 # =================================================

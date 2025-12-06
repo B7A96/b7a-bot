@@ -6,7 +6,8 @@ from telegram.ext import ContextTypes
 from .engine import generate_signal
 from bot.market import get_price
 from bot.scanner import get_top_usdt_symbols
-from .analytics import get_trades_summary
+from .analytics import get_trades_summary, mark_last_trade
+
 
 # قائمة مراقبة ديناميكية (في الذاكرة فقط)
 WATCHLIST: Set[str] = set(["BTC", "ETH", "SOL", "DOGE", "TON", "BNB"])
@@ -827,3 +828,43 @@ async def list_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbols = ", ".join(sorted(WATCHLIST))
     await update.message.reply_text(f"👀 قائمة المراقبة الحالية:\n{symbols}")
+
+# ========= أوامر تعليم نتيجة الصفقة (WIN / LOSS) =========
+
+async def mark_win(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /win BTC
+    تعلم البوت أن آخر صفقة على BTCUSDT كانت رابحة (WIN).
+    """
+    if not context.args:
+        await update.message.reply_text("استخدم الأمر كذا: /win BTC")
+        return
+
+    base = _normalize_symbol(context.args[0])  # BTC
+    symbol_full = base + "USDT"
+
+    ok = mark_last_trade(symbol_full, "WIN")
+    if ok:
+        await update.message.reply_text(f"✅ تم تسجيل آخر صفقة على {symbol_full} كـ WIN.")
+    else:
+        await update.message.reply_text("❌ ما لقيت صفقة سابقة لهذا الزوج في ملف اللوق.")
+
+
+async def mark_loss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /loss BTC
+    تعلم البوت أن آخر صفقة على BTCUSDT كانت خاسرة (LOSS).
+    """
+    if not context.args:
+        await update.message.reply_text("استخدم الأمر كذا: /loss BTC")
+        return
+
+    base = _normalize_symbol(context.args[0])
+    symbol_full = base + "USDT"
+
+    ok = mark_last_trade(symbol_full, "LOSS")
+    if ok:
+        await update.message.reply_text(f"✅ تم تسجيل آخر صفقة على {symbol_full} كـ LOSS.")
+    else:
+        await update.message.reply_text("❌ ما لقيت صفقة سابقة لهذا الزوج في ملف اللوق.")
+

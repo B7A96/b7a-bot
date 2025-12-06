@@ -20,8 +20,6 @@ from bot.handlers import (
     list_watchlist,
     stats,
     radar,
-    radar_long,      # 🔵 رادار لونغ
-    radar_short,     # 🔴 رادار شورت
     toggle_mode,
     mark_win,
     mark_loss,
@@ -73,6 +71,7 @@ if __name__ == "__main__":
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+
 
 
 

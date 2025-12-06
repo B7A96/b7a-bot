@@ -245,3 +245,32 @@ def compute_all_indicators(
         result["vwap"] = None
 
     return result
+    
+# ==========================
+# 🔤 Utility: Normalize Symbol
+# ==========================
+def normalize_symbol(symbol: str) -> str:
+    """
+    توحيد شكل الرمز قبل التحليل:
+    - إزالة USDT / PERP إذا كانت موجودة
+    - تحويل إلى حروف كبيرة
+    أمثلة:
+      btc      -> BTC
+      BTCUSDT  -> BTC
+      ethperp  -> ETH
+    """
+    if not symbol:
+        return ""
+
+    s = str(symbol).strip().upper()
+
+    # لو المستخدم كتب BTCUSDT أو ETHUSDT
+    if s.endswith("USDT"):
+        s = s[:-4]
+
+    # لو من نوع فيوتشر PERP مثلا BTC-PERP أو BTCPERP
+    s = s.replace("-", "")
+    if s.endswith("PERP"):
+        s = s[:-4]
+
+    return s

@@ -294,3 +294,54 @@ def mark_last_trade(symbol: str, result: str) -> bool:
         writer.writerows(rows)
 
     return True
+    
+# ============================================
+#  B7A Ultra — Stats Analyzer (Trainer + Win/Loss)
+# ============================================
+
+def analyze_stats(chat_data: dict) -> str:
+    """
+    يحسب نتائج المتداول بناءً على /win و /loss
+    ويعرض ملخص أداء البوت + أداء العملات.
+    """
+    trainer = chat_data.get("trainer", {})
+    if not trainer:
+        return "📊 لا توجد بيانات بعد. استخدم /win و /loss لتسجيل نتائج الصفقات."
+
+    total_wins = 0
+    total_losses = 0
+
+    lines = []
+    lines.append("📊 <b>B7A Ultra — Performance Stats</b>\n")
+
+    for sym, record in trainer.items():
+        wins = record.get("wins", 0)
+        losses = record.get("losses", 0)
+
+        total_wins += wins
+        total_losses += losses
+
+        total = wins + losses
+        if total > 0:
+            win_rate = (wins / total) * 100
+        else:
+            win_rate = 0.0
+
+        lines.append(
+            f"• {sym}: {wins} ربح / {losses} خسارة — معدل نجاح <b>{win_rate:.1f}%</b>"
+        )
+
+    lines.append("\n— — — — —")
+
+    total_all = total_wins + total_losses
+    if total_all > 0:
+        global_wr = (total_wins / total_all) * 100
+    else:
+        global_wr = 0.0
+
+    lines.append(f"📈 إجمالي الأرباح: <b>{total_wins}</b>")
+    lines.append(f"📉 إجمالي الخسائر: <b>{total_losses}</b>")
+    lines.append(f"🏁 <b>المعدل العام للنجاح: {global_wr:.1f}%</b>")
+
+    return "\n".join(lines)
+

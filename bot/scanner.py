@@ -154,3 +154,34 @@ def get_top_usdt_symbols(limit: int = 40, use_cache: bool = True) -> List[str]:
     _last_cached_symbols = symbols[:]
 
     return symbols
+# =========================
+#  سكّانر مستوى الإشارات  (Integration مع الـ Engine)
+# =========================
+from bot.engine import generate_signal  # تأكد إن المسار صحيح
+
+def scan_market(symbols: List[str], mode: str = "balanced") -> List[dict]:
+    """
+    يمسح قائمة رموز ويُرجع:
+      [{"symbol": "BTC", "signal": {...}}, ...]
+    نستخدمه في أوامر /scan و /radar.
+    """
+    results: List[dict] = []
+    for sym in symbols:
+        sym_norm = sym.upper()
+        try:
+            # في السكّانر والرادار نطفّي Coinglass لتخفيف الضغط
+            sig = generate_signal(sym_norm, mode=mode, use_coinglass=False)
+            results.append({"symbol": sym_norm, "signal": sig})
+        except Exception:
+            # ما نوقف على خطأ رمز واحد
+            continue
+    return results
+
+
+def scan_watchlist_symbols(watchlist: List[str], mode: str = "balanced") -> List[dict]:
+    """
+    نفس scan_market لكن مخصصة لقائمة المراقبة.
+    """
+    if not watchlist:
+        return []
+    return scan_market(watchlist, mode=mode)

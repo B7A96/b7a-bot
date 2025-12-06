@@ -25,6 +25,7 @@ from bot.handlers import (
     toggle_mode,
     mark_win,
     mark_loss,
+    show_analysis,
 )
 
 # متغير التوكن من البيئة
@@ -68,8 +69,10 @@ if __name__ == "__main__":
     # أزرار الإشارة (Refresh + Mode)
     app.add_handler(CallbackQueryHandler(refresh_signal, pattern=r"^refresh\|"))
     app.add_handler(CallbackQueryHandler(toggle_mode, pattern=r"^mode\|"))
+    app.add_handler(CallbackQueryHandler(show_analysis, pattern=r"^analysis\|"))
 
     print("B7A BOT is running on Telegram...")
     app.run_polling(drop_pending_updates=True)
+
 
 

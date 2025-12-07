@@ -829,7 +829,7 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "liq_below": liq_below,
             # إضافات الذكاء الجديد
             "market_regime": market_regime,
-            "regime": market_regime
+            "regime": market_regime,
             "is_breakout_up": is_breakout_up,
             "is_breakout_down": is_breakout_down,
             "has_bull_div": has_bull_div,

@@ -10,6 +10,8 @@ from datetime import datetime
 from .coinglass_client import get_coinglass_intel
 from .analytics import performance_intel
 from .intel_hub import get_global_intel
+from .onchain_intel import get_onchain_intel
+
 
 
 # =========================
@@ -1483,84 +1485,106 @@ def _is_ultra_hacker_signal(
     tf_data: Dict[str, Dict[str, Any]],
     global_intel: Dict[str, Any],
     coinglass: Optional[Dict[str, Any]] = None,
+    onchain_intel: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """
     فلتر ULTRA – صفقات سنايبر عالمية.
-    يستخدم:
-      - قرار الـ Engine (combined)
-      - ملخص الفريمات tf_data
-      - Global Intel (BTC trend + Fear/Greed + Shock)
-      - Coinglass (OI bias بسيطة)
+    يعتمد على:
+      - قوة الإشارة نفسها (Score / Confidence / PumpRisk)
+      - توافق الفريمات
+      - Global Intel (اتجاه BTC + Shock Mode)
+      - On-Chain Intel (Dump Risk من BTC + نشاط الشبكة)
+      - Coinglass (Funding / OI / Liquidations)
     """
-    action = combined.get("action")
+
+    action = (combined.get("action") or "").upper()
     if action not in ("BUY", "SELL"):
         return False
 
-    score = float(combined.get("score", 0.0) or 0.0)
-    confidence = combined.get("confidence") or "LOW"
-    regime = combined.get("market_regime") or "UNKNOWN"
-    pump_risk = combined.get("pump_dump_risk") or "LOW"
-    liquidity_score = float(combined.get("liquidity_score", 0.0) or 0.0)
-    bull_align = float(combined.get("bull_align", 0.0) or 0.0)
-    bear_align = float(combined.get("bear_align", 0.0) or 0.0)
+    score = float(combined.get("score") or 0.0)
+    confidence = (combined.get("confidence") or "").upper()
+    pump_risk = (combined.get("pump_dump_risk") or combined.get("pump_dump_risk_label") or "MEDIUM").upper()
 
-    # 1) شروط قوية على الزوج نفسه
-    if score < 82.0:
+    # 1) فلتر أساسي على الإشارة نفسها
+    if score < 70:
         return False
-    if confidence != "HIGH":
+    if confidence == "LOW":
         return False
-    if regime != "TRENDING":
-        return False
-    if pump_risk not in ("LOW",):
-        return False
-    if liquidity_score < 10.0:
+    if pump_risk == "HIGH":
         return False
 
-    if action == "BUY" and bull_align < 0.70:
-        return False
-    if action == "SELL" and bear_align < 0.70:
-        return False
+    # 2) توافق الفريمات
+    trends = {tf: (d or {}).get("trend") for tf, d in tf_data.items()}
+    regimes = {tf: (d or {}).get("regime") for tf, d in tf_data.items()}
 
-    # 2) Global BTC Regime + Shock
-    btc_regime = global_intel.get("btc_regime", "CHOP")
-    btc_trend = global_intel.get("btc_trend", "FLAT")
-    shock_mode = bool(global_intel.get("shock_mode"))
+    bullish_cnt = sum(1 for t in trends.values() if t == "BULLISH")
+    bearish_cnt = sum(1 for t in trends.values() if t == "BEARISH")
+    trending_cnt = sum(1 for r in regimes.values() if r == "TRENDING")
 
-    # لا ULTRA في حالة CRASH أو صدمة قوية
-    if btc_regime == "CRASH" or shock_mode:
-        return False
-
-    # شراء → نفضّل BTC في TRENDING / UP أو FLAT
     if action == "BUY":
-        if btc_regime != "TRENDING":
+        if bullish_cnt < 3:
             return False
-        if btc_trend not in ("UP", "FLAT"):
-            return False
-
-    # بيع → نمنع لو BTC ترند UP قوي
-    if action == "SELL":
-        if btc_regime == "TRENDING" and btc_trend == "UP":
+    else:
+        if bearish_cnt < 3:
             return False
 
-    # 3) Fear & Greed – نحذر من Extreme Greed على Long جديدة
-    fg = global_intel.get("fear_greed_index")
-    if fg is not None:
-        fg = int(fg)
-        if action == "BUY" and fg >= 80:
-            # طمع شديد → نمنع ULTRA لونغ جديدة
+    if trending_cnt < 2:
+        return False
+
+    # 3) Global Intel – لا ندخل ضد BTC + لا ندخل وقت Shock
+    btc_trend = (global_intel or {}).get("btc_trend", "FLAT")
+    shock_mode = bool((global_intel or {}).get("shock_mode"))
+    global_mood = float((global_intel or {}).get("global_mood_score") or 50.0)
+
+    if shock_mode:
+        # وقت أخبار عنيفة / كراش محتمل → نطفي ULTRA
+        return False
+
+    if action == "BUY" and btc_trend == "BEARISH" and global_mood < 45:
+        return False
+
+    if action == "SELL" and btc_trend == "BULLISH" and global_mood > 55:
+        return False
+
+    # 4) On-Chain Intel
+    if onchain_intel and onchain_intel.get("available"):
+        # حماية رئيسية من Crash مفاجئ:
+        if onchain_intel.get("dump_risk") == "HIGH":
             return False
 
-    # 4) توافق بسيط مع OI Bias
-    if coinglass:
-        oi = (coinglass or {}).get("open_interest") or {}
-        oi_bias = oi.get("oi_bias", "NEUTRAL")
+        btc_chain = (onchain_intel.get("btc") or {})
+        activity_score = float(btc_chain.get("activity_score") or 50.0)
 
+        # لا نأخذ BUY لو نشاط الشبكة on-chain ميت
+        if action == "BUY" and activity_score < 40:
+            return False
+
+    # 5) Coinglass Intel – Funding / OI / Liquidations
+    if coinglass and coinglass.get("available"):
+        funding = (coinglass.get("funding") or {}).get("funding_bias", "NEUTRAL").upper()
+        liq_side = (coinglass.get("liquidations") or {}).get("side", "NONE").upper()
+        oi_bias = (coinglass.get("open_interest") or {}).get("oi_bias", "NEUTRAL").upper()
+
+        # لا نطارد Long crowded في BUY
+        if action == "BUY" and funding == "LONG_CROWDED":
+            return False
+        if action == "SELL" and funding == "SHORT_CROWDED":
+            return False
+
+        # لا ندخل مع تصفية نفس الجهة
+        if action == "BUY" and liq_side == "LONG":
+            return False
+        if action == "SELL" and liq_side == "SHORT":
+            return False
+
+        # لا نبيع مع Leverage Up ولا نشتري مع Leverage Down
         if action == "BUY" and oi_bias == "LEVERAGE_DOWN":
             return False
         if action == "SELL" and oi_bias == "LEVERAGE_UP":
             return False
 
     return True
+
 
 # =========================
 # نقطة الدخول الرئيسية
@@ -1608,7 +1632,7 @@ def generate_signal(
     except Exception:
         binance_sentiment = None
         
-    # Global Intel – حالة السوق العام (BTC + Fear & Greed)
+    # 1.4) Global Intel – حالة السوق العام (BTC + Fear & Greed)
     try:
         global_intel = get_global_intel()
     except Exception as e:
@@ -1620,6 +1644,15 @@ def generate_signal(
             "fear_greed_index": None,
             "global_mood_score": 50.0,
         }
+
+    # 1.5) On-Chain Intel – شبكة BTC + Gas + Solana
+    try:
+        etherscan_key = os.getenv("ETHERSCAN_API_KEY")
+        onchain_intel = get_onchain_intel(symbol_norm, etherscan_key)
+    except Exception as e:
+        print("On-chain Intel error:", e)
+        onchain_intel = {"available": False, "dump_risk": "MEDIUM"}
+
 
 
     # 1.5) Coinglass Intel (من coinglass_client.py)
@@ -1665,8 +1698,10 @@ def generate_signal(
         mode=mode,
     )
 
-        # نضيف Global Intel في الـ combined عشان نستخدمه في الأسباب / ULTRA
+    # Global / On-Chain Intel في الـ combined عشان نستخدمه في الأسباب / ULTRA
     combined["global_intel"] = global_intel
+    combined["onchain_intel"] = onchain_intel
+
 
     # 3.25) تأثير Coinglass (OI + Funding + Liquidations) على Long/Short
     if coinglass and coinglass.get("available"):
@@ -1753,14 +1788,16 @@ def generate_signal(
         except Exception as e:
             print("Coinglass impact error:", e)
 
-    # 3.4) ULTRA Hacker Filter – يعتمد على Global Intel + Coinglass
+    # 3.4) ULTRA Hacker Filter – Global + On-Chain + Coinglass
     try:
         ultra_ok = _is_ultra_hacker_signal(
             combined,
             tf_results,
             global_intel,
             coinglass if use_coinglass else None,
+            onchain_intel,
         )
+
     except Exception as e:
         ultra_ok = False
         print("ULTRA filter error:", e)
@@ -2020,6 +2057,7 @@ def generate_signal(
         "orderbook": orderbook_intel,
         "binance_sentiment": binance_sentiment,
         "mode": mode,
+        "onchain_intel": combined.get("onchain_intel"),
         "global_intel": combined.get("global_intel"),
         "is_ultra": combined.get("is_ultra", False),
 

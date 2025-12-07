@@ -9,6 +9,7 @@ from datetime import datetime
 
 from .coinglass_client import get_coinglass_intel
 from .analytics import performance_intel
+from .intel_hub import get_global_intel
 
 
 # =========================
@@ -1477,6 +1478,89 @@ def compute_trade_levels_multi(
     }
 
 
+def _is_ultra_hacker_signal(
+    combined: Dict[str, Any],
+    tf_data: Dict[str, Dict[str, Any]],
+    global_intel: Dict[str, Any],
+    coinglass: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    فلتر ULTRA – صفقات سنايبر عالمية.
+    يستخدم:
+      - قرار الـ Engine (combined)
+      - ملخص الفريمات tf_data
+      - Global Intel (BTC trend + Fear/Greed + Shock)
+      - Coinglass (OI bias بسيطة)
+    """
+    action = combined.get("action")
+    if action not in ("BUY", "SELL"):
+        return False
+
+    score = float(combined.get("score", 0.0) or 0.0)
+    confidence = combined.get("confidence") or "LOW"
+    regime = combined.get("market_regime") or "UNKNOWN"
+    pump_risk = combined.get("pump_dump_risk") or "LOW"
+    liquidity_score = float(combined.get("liquidity_score", 0.0) or 0.0)
+    bull_align = float(combined.get("bull_align", 0.0) or 0.0)
+    bear_align = float(combined.get("bear_align", 0.0) or 0.0)
+
+    # 1) شروط قوية على الزوج نفسه
+    if score < 82.0:
+        return False
+    if confidence != "HIGH":
+        return False
+    if regime != "TRENDING":
+        return False
+    if pump_risk not in ("LOW",):
+        return False
+    if liquidity_score < 10.0:
+        return False
+
+    if action == "BUY" and bull_align < 0.70:
+        return False
+    if action == "SELL" and bear_align < 0.70:
+        return False
+
+    # 2) Global BTC Regime + Shock
+    btc_regime = global_intel.get("btc_regime", "CHOP")
+    btc_trend = global_intel.get("btc_trend", "FLAT")
+    shock_mode = bool(global_intel.get("shock_mode"))
+
+    # لا ULTRA في حالة CRASH أو صدمة قوية
+    if btc_regime == "CRASH" or shock_mode:
+        return False
+
+    # شراء → نفضّل BTC في TRENDING / UP أو FLAT
+    if action == "BUY":
+        if btc_regime != "TRENDING":
+            return False
+        if btc_trend not in ("UP", "FLAT"):
+            return False
+
+    # بيع → نمنع لو BTC ترند UP قوي
+    if action == "SELL":
+        if btc_regime == "TRENDING" and btc_trend == "UP":
+            return False
+
+    # 3) Fear & Greed – نحذر من Extreme Greed على Long جديدة
+    fg = global_intel.get("fear_greed_index")
+    if fg is not None:
+        fg = int(fg)
+        if action == "BUY" and fg >= 80:
+            # طمع شديد → نمنع ULTRA لونغ جديدة
+            return False
+
+    # 4) توافق بسيط مع OI Bias
+    if coinglass:
+        oi = (coinglass or {}).get("open_interest") or {}
+        oi_bias = oi.get("oi_bias", "NEUTRAL")
+
+        if action == "BUY" and oi_bias == "LEVERAGE_DOWN":
+            return False
+        if action == "SELL" and oi_bias == "LEVERAGE_UP":
+            return False
+
+    return True
 
 # =========================
 # نقطة الدخول الرئيسية
@@ -1523,8 +1607,21 @@ def generate_signal(
         binance_sentiment = fetch_binance_sentiment(symbol_norm)
     except Exception:
         binance_sentiment = None
+        
+    # Global Intel – حالة السوق العام (BTC + Fear & Greed)
+    try:
+        global_intel = get_global_intel()
+    except Exception as e:
+        print("Global Intel error:", e)
+        global_intel = {
+            "btc_trend": "FLAT",
+            "btc_regime": "CHOP",
+            "shock_mode": False,
+            "fear_greed_index": None,
+            "global_mood_score": 50.0,
+        }
 
-    # 1.5) Coinglass Intel (من coinglass_client.py)
+
     # 1.5) Coinglass Intel (من coinglass_client.py)
     coinglass = None
     if use_coinglass:
@@ -1568,6 +1665,9 @@ def generate_signal(
         mode=mode,
     )
 
+        # نضيف Global Intel في الـ combined عشان نستخدمه في الأسباب / ULTRA
+    combined["global_intel"] = global_intel
+
     # 3.25) تأثير Coinglass (OI + Funding + Liquidations) على Long/Short
     if coinglass and coinglass.get("available"):
         try:
@@ -1576,6 +1676,8 @@ def generate_signal(
                     combined[key] = max(
                         0.0, min(100.0, combined.get(key, 50.0) + delta)
                     )
+
+
 
             # (A) Open Interest Bias – نفس منطقك الحالي
             oi = (coinglass or {}).get("open_interest") or {}
@@ -1651,6 +1753,21 @@ def generate_signal(
         except Exception as e:
             print("Coinglass impact error:", e)
 
+    # 3.4) ULTRA Hacker Filter – يعتمد على Global Intel + Coinglass
+    try:
+        ultra_ok = _is_ultra_hacker_signal(
+            combined,
+            tf_results,
+            global_intel,
+            coinglass if use_coinglass else None,
+        )
+    except Exception as e:
+        ultra_ok = False
+        print("ULTRA filter error:", e)
+
+    combined["is_ultra"] = ultra_ok
+    if ultra_ok:
+        combined["grade"] = "ULTRA"
 
 
     # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
@@ -1903,6 +2020,9 @@ def generate_signal(
         "orderbook": orderbook_intel,
         "binance_sentiment": binance_sentiment,
         "mode": mode,
+        "global_intel": combined.get("global_intel"),
+        "is_ultra": combined.get("is_ultra", False),
+
     }
 
     # تسجيل الصفقات الفعلية فقط

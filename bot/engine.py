@@ -1585,6 +1585,152 @@ def _is_ultra_hacker_signal(
 
     return True
 
+def _apply_shield(
+    combined: Dict[str, Any],
+    global_intel: Dict[str, Any],
+    coinglass: Optional[Dict[str, Any]] = None,
+    onchain_intel: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    B7A Shield – وضع الاختبار
+
+    ✦ ما يغيّر BUY/SELL
+    ✦ فقط يضيف:
+        shield_active = True/False
+        shield_suggest_no_trade = True/False
+        shield_reasons = [..]
+
+    عشان نعرف لاحقاً:
+      - أي صفقات كانت الشروط فيها خطرة
+      - وهل فعلاً كانت تخسر كثير
+    """
+
+    action = (combined.get("action") or "").upper()
+    grade = str(combined.get("grade") or "").upper()
+    mode = (combined.get("mode") or "balanced").lower()
+
+    reasons: List[str] = []
+    suggest_no_trade = False
+
+    gi = global_intel or {}
+
+    # ========== 1) Global / BTC وضع ==========
+    shock_mode = bool(gi.get("shock_mode"))
+    btc_regime = gi.get("btc_regime", "CHOP")
+
+    # تغيير BTC في 24 ساعة لو متوفر
+    try:
+        btc_change_1 = float(gi.get("btc_change_1") or 0.0)
+    except Exception:
+        btc_change_1 = 0.0
+
+    fg_raw = gi.get("fear_greed_index")
+    try:
+        fg_val = int(fg_raw) if fg_raw is not None else None
+    except Exception:
+        fg_val = None
+
+    if shock_mode:
+        reasons.append("BTC Shock Mode مُفعّل – حركة عنيفة / أخبار قوية.")
+        suggest_no_trade = True
+
+    if btc_regime in ("CRASH", "PANIC") or btc_change_1 <= -7.0:
+        reasons.append(f"BTC في حالة هبوط حاد ({btc_change_1:.1f}%) – تجنّب صفقات جديدة.")
+        suggest_no_trade = True
+
+    if fg_val is not None:
+        # طمع مفرط
+        if action == "BUY" and fg_val >= 85:
+            reasons.append(f"Extreme Greed (Fear & Greed = {fg_val}) – لونغ جديد خطير.")
+            if mode != "momentum":
+                suggest_no_trade = True
+
+        # خوف مفرط
+        if action == "SELL" and fg_val <= 10:
+            reasons.append(f"Extreme Fear (Fear & Greed = {fg_val}) – شورت إضافي خطير.")
+            if mode == "safe":
+                suggest_no_trade = True
+
+    # ========== 2) On-Chain (اختياري) ==========
+    if onchain_intel and onchain_intel.get("available"):
+        dump_risk = onchain_intel.get("dump_risk", "MEDIUM")
+        if dump_risk == "HIGH":
+            reasons.append("On-Chain: Dump Risk HIGH من شبكة BTC.")
+            suggest_no_trade = True
+
+        btc_chain = (onchain_intel.get("btc") or {})
+        try:
+            activity_score = float(btc_chain.get("activity_score") or 50.0)
+        except Exception:
+            activity_score = 50.0
+
+        if action == "BUY" and activity_score < 35.0 and mode in ("safe", "balanced"):
+            reasons.append(f"On-Chain: نشاط BTC ضعيف ({activity_score:.1f}/100) – لونغ غير مفضّل.")
+            suggest_no_trade = True
+
+    # ========== 3) Coinglass ==========
+    if coinglass and coinglass.get("available"):
+        funding = (coinglass.get("funding") or {})
+        funding_bias = str(funding.get("funding_bias") or "NEUTRAL").upper()
+        try:
+            funding_score = float(funding.get("funding_score") or 0.0)
+        except Exception:
+            funding_score = 0.0
+
+        if funding_bias in ("LONG_CROWDED", "SHORT_CROWDED") and funding_score >= 80:
+            reasons.append(f"Coinglass: Funding {funding_bias} (score={funding_score:.0f}) – احتمال سحبة/سكويز.")
+            if mode != "momentum":
+                suggest_no_trade = True
+
+        # Liquidations
+        liq = (coinglass.get("liquidation") or coinglass.get("liquidations") or {})
+        liq_bias = str(liq.get("bias") or liq.get("side") or "NONE").upper()
+        try:
+            liq_intensity = float(liq.get("intensity") or 0.0)
+        except Exception:
+            liq_intensity = 0.0
+
+        if liq_bias in ("LONG_WASHOUT", "SHORT_WASHOUT") and liq_intensity >= 0.7:
+            reasons.append(
+                f"Coinglass: {liq_bias} قوي (intensity={liq_intensity:.2f}) – السوق تحت تصفية."
+            )
+            if mode == "safe":
+                suggest_no_trade = True
+
+        # Open Interest
+        oi = (coinglass.get("open_interest") or {})
+        try:
+            oi_chg_24h = float(oi.get("oi_change_24h") or 0.0)
+        except Exception:
+            oi_chg_24h = 0.0
+
+        if abs(oi_chg_24h) >= 35.0 and mode == "safe":
+            reasons.append(
+                f"Coinglass: تغير OI {oi_chg_24h:.1f}% خلال 24h – رافعة خطرة على الزوج."
+            )
+            suggest_no_trade = True
+
+    # ========== 4) السيولة / رينج ==========
+    try:
+        liq_score = float(combined.get("liquidity_score") or 0.0)
+    except Exception:
+        liq_score = 0.0
+
+    if liq_score < 3.0:
+        reasons.append("سيولة ضعيفة جدًا (Liquidity Score < 3) – سبريد/عمق سيء.")
+        suggest_no_trade = True
+
+    market_regime = str(combined.get("market_regime") or "").upper()
+    if market_regime in ("NOISE", "CHOP") and grade in ("B", "C") and mode == "safe":
+        reasons.append("سوق متذبذب + Grade ضعيف في SAFE Mode – الانتظار أفضل.")
+        suggest_no_trade = True
+
+    # ========== 5) تثبيت النتائج (تحذيري فقط) ==========
+    combined["shield_active"] = bool(reasons)
+    combined["shield_suggest_no_trade"] = bool(suggest_no_trade)
+    combined["shield_reasons"] = reasons
+
+    return combined
 
 # =========================
 # نقطة الدخول الرئيسية
@@ -1830,6 +1976,21 @@ def generate_signal(
 
     # نثبت الـ mode داخل decision
     combined["mode"] = mode
+
+    # ===========================
+    # 🛡 B7A SHIELD – وضع الاختبار
+    # (تحذير فقط – لا يغير BUY/SELL)
+    # ===========================
+    onchain_intel = combined.get("onchain_intel")
+    combined = _apply_shield(
+       combined,
+       global_intel,
+       coinglass if use_coinglass else None,
+       onchain_intel,
+    )
+
+    
+    
 
     tp: Optional[float] = None
     sl: Optional[float] = None

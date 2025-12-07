@@ -125,7 +125,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk", "LOW")
 
-    # ✅ SL/TP من الـ signal_data نفسِه (هنا كان الخطأ)
+    # SL/TP من الـ signal_data
     sl = signal_data.get("sl")
     tp1 = signal_data.get("tp1")
     tp2 = signal_data.get("tp2")
@@ -135,12 +135,11 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
 
     msg: List[str] = []
     msg.append(f"🏅 <b>B7A Ultra Signal – {symbol.upper()}</b>")
-    if last_price:
+    if last_price is not None:
         msg.append(f"💰 السعر الحالي: <b>{last_price}</b> USDT")
 
     msg.append(f"🏆 Grade: <b>{grade}</b>")
     msg.append(f"🌍 وضع السوق العام: <b>{trend}</b>")
-    # ⚙️ إظهار المود بشكل واضح
     msg.append(f"⚙️ Mode: <b>{str(mode).upper()}</b>")
 
     msg.append("")
@@ -157,18 +156,18 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     if sl is not None:
         msg.append(f"• SL (وقف الخسارة): <b>{sl}</b>")
     if tp1 is not None:
-        msg.append(f"• TP1: {tp1}")
+        msg.append(f"• TP1: <b>{tp1}</b>")
     if tp2 is not None:
-        msg.append(f"• TP2: {tp2}")
+        msg.append(f"• TP2: <b>{tp2}</b>")
     if tp3 is not None:
-        msg.append(f"• TP3: {tp3}")
+        msg.append(f"• TP3: <b>{tp3}</b>")
 
     msg.append("")
     msg.append("⚠️ هذا تحليل آلي — استخدم إدارة مخاطر صارمة.")
+
     # ===========================
     # 🛡 B7A Shield – وضع الاختبار
     # ===========================
-    decision = signal.get("decision", {})
     shield_active = decision.get("shield_active")
     shield_suggest_no_trade = decision.get("shield_suggest_no_trade")
     shield_reasons = (
@@ -178,16 +177,15 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     )
 
     if shield_active:
-        lines.append("")  # سطر فاصل
-        lines.append("🛡 <b>B7A Shield</b> (وضع اختبار)")
+        msg.append("")  # سطر فاصل
+        msg.append("🛡 <b>B7A Shield</b> (وضع اختبار)")
         if shield_suggest_no_trade:
-            lines.append("• ⚠️ الشيلد يعتبر هذه الصفقة <b>عالية الخطورة</b> ولا ينصح بالدخول.")
+            msg.append("• ⚠️ الشيلد يعتبر هذه الصفقة <b>عالية الخطورة</b> ولا ينصح بالدخول.")
         else:
-            lines.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
+            msg.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
 
         for r in shield_reasons:
-            lines.append(f"• {r}")
-
+            msg.append(f"• {r}")
 
     return "\n".join(msg)
 

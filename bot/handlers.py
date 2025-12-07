@@ -165,6 +165,29 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
 
     msg.append("")
     msg.append("⚠️ هذا تحليل آلي — استخدم إدارة مخاطر صارمة.")
+    # ===========================
+    # 🛡 B7A Shield – وضع الاختبار
+    # ===========================
+    decision = signal.get("decision", {})
+    shield_active = decision.get("shield_active")
+    shield_suggest_no_trade = decision.get("shield_suggest_no_trade")
+    shield_reasons = (
+        decision.get("shield_reasons")
+        or decision.get("no_trade_reasons")
+        or []
+    )
+
+    if shield_active:
+        lines.append("")  # سطر فاصل
+        lines.append("🛡 <b>B7A Shield</b> (وضع اختبار)")
+        if shield_suggest_no_trade:
+            lines.append("• ⚠️ الشيلد يعتبر هذه الصفقة <b>عالية الخطورة</b> ولا ينصح بالدخول.")
+        else:
+            lines.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
+
+        for r in shield_reasons:
+            lines.append(f"• {r}")
+
 
     return "\n".join(msg)
 

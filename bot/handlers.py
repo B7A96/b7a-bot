@@ -16,7 +16,7 @@ from bot.market import (
 from bot.scanner import scan_market, scan_watchlist_symbols
 from bot.analytics import analyze_stats
 from bot.indicators import normalize_symbol as _normalize_symbol
-
+from html import escape
 
 # ==========================
 # 1) Utility: Get Mode
@@ -185,7 +185,8 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
             msg.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
 
         for r in shield_reasons:
-            msg.append(f"• {r}")
+            safe_r = escape(str(r))  # هنا نهرب أي `<` أو `>`
+            msg.append(f"• {safe_r}")
 
     return "\n".join(msg)
 

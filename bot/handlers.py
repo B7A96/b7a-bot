@@ -1,6 +1,6 @@
 import time
 from typing import Dict, Any, List, Optional
-
+from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ContextTypes,
@@ -16,7 +16,7 @@ from bot.market import (
 from bot.scanner import scan_market, scan_watchlist_symbols
 from bot.analytics import analyze_stats
 from bot.indicators import normalize_symbol as _normalize_symbol
-from html import escape
+
 
 # ==========================
 # 1) Utility: Get Mode
@@ -188,12 +188,13 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
             safe_r = escape(str(r))  # هنا نهرب أي `<` أو `>`
             msg.append(f"• {safe_r}")
 
-        if flow:
-        msg.append("")
-        msg.append("🌊 <b>Flow Snapshot</b>")
-        msg.append(
-            f"• Flow: <b>{flow_bias}</b> | Score: <b>{float(flow_score or 50):.0f}</b> | State: <b>{flow_state}</b>"
-        )
+flow = signal_data.get("flow")
+if flow:
+    msg.append("")
+    msg.append("🔄 <b>B7A Flow Engine</b>")
+    msg.append(f"• Regime: <b>{escape(str(flow.get('regime', 'UNKNOWN')))}</b>")
+    msg.append(f"• Bias: <b>{escape(str(flow.get('bias', 'NEUTRAL')))}</b>")
+
 
 
     return "\n".join(msg)

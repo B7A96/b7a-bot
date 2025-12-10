@@ -118,8 +118,16 @@ def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
     }
     data = _safe_get(ETHERSCAN_GAS_URL, params=params)
 
-    # Etherscan v2 يضع النتيجة داخل result
-    result = data.get("result") or {}
+    # Etherscan العادي يرجع:
+    # { "status": "1", "message": "OK", "result": { ... } }
+    # لكن في حالة الخطأ / الريت ليمت:
+    # { "status": "0", "message": "NOTOK", "result": "Max rate limit reached ..." }
+    result = data.get("result")
+
+    # لو result مو dict (يعني سترنق) نرمي خطأ بسيط ونخلي onchain_eth متوقف
+    if not isinstance(result, dict):
+        raise OnchainError(f"Etherscan gas oracle returned non-dict result: {result}")
+
     # الحقول ترجع كنصوص
     safe_gwei = float(result.get("SafeGasPrice") or 0.0)
     propose_gwei = float(result.get("ProposeGasPrice") or 0.0)
@@ -161,6 +169,7 @@ def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
         "congestion_score": congestion_score,
         "gas_bias": gas_bias,
     }
+
 
 
 # =========================

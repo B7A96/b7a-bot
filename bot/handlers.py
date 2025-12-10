@@ -165,9 +165,10 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     msg.append("")
     msg.append("⚠️ هذا تحليل آلي — استخدم إدارة مخاطر صارمة.")
 
-    # ===========================
+    # =========================
     # 🛡 B7A Shield – وضع الاختبار
-    # ===========================
+    # =========================
+    decision = signal_data.get("decision", {})
     shield_active = decision.get("shield_active")
     shield_suggest_no_trade = decision.get("shield_suggest_no_trade")
     shield_reasons = (
@@ -177,28 +178,28 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     )
 
     if shield_active:
-        msg.append("")  # سطر فاصل
+        msg.append("")
         msg.append("🛡 <b>B7A Shield</b> (وضع اختبار)")
         if shield_suggest_no_trade:
             msg.append("• ⚠️ الشيلد يعتبر هذه الصفقة <b>عالية الخطورة</b> ولا ينصح بالدخول.")
         else:
             msg.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
-
         for r in shield_reasons:
-            safe_r = escape(str(r))  # هنا نهرب أي `<` أو `>`
-            msg.append(f"• {safe_r}")
+            msg.append(f"• {r}")
 
-flow = signal_data.get("flow")
-if flow:
-    msg.append("")
-    msg.append("🔄 <b>B7A Flow Engine</b>")
-    msg.append(f"• Regime: <b>{escape(str(flow.get('regime', 'UNKNOWN')))}</b>")
-    msg.append(f"• Bias: <b>{escape(str(flow.get('bias', 'NEUTRAL')))}</b>")
-
-
+    # =========================
+    # 🔄 B7A Flow Engine
+    # =========================
+    flow = signal_data.get("flow")
+    if flow:
+        msg.append("")
+        msg.append("🔄 <b>B7A Flow Engine</b>")
+        flow_regime = str(flow.get("regime", "UNKNOWN"))
+        flow_bias = str(flow.get("bias", "NEUTRAL"))
+        msg.append(f"• Regime: <b>{escape(flow_regime)}</b>")
+        msg.append(f"• Bias: <b>{escape(flow_bias)}</b>")
 
     return "\n".join(msg)
-
 
 
 # =================================================

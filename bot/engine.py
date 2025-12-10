@@ -1734,6 +1734,217 @@ def _apply_shield(
 
     return combined
 
+def build_flow_intel(
+    tf_data: Dict[str, Dict[str, Any]],
+    coinglass: Optional[Dict[str, Any]] = None,
+    binance_sentiment: Optional[Dict[str, Any]] = None,
+    last_price: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    B7A Flow Engine V1
+    يقيس اتجاه وقوة تدفق المال (flow_score / flow_bias / flow_state).
+
+    يعتمد على:
+      - سرعة حركة السعر (من فريم 15m + 1h)
+      - تسارع الفوليوم
+      - تغيّر الـ Open Interest
+      - تصفيات العقود (Liquidations)
+      - تغيّر الـ Funding
+      - Binance Sentiment (اختياري)
+    """
+    # 1) تحضير الأساس
+    tf_15m = tf_data.get("15m", {}) or {}
+    tf_1h = tf_data.get("1h", {}) or {}
+
+    change_15m = float(tf_15m.get("change_4") or 0.0)  # آخر ~4 شمعات 15m
+    change_1h = float(tf_1h.get("change_4") or 0.0)
+
+    vol_surge_15m = bool(tf_15m.get("volume_surge"))
+    vol_surge_1h = bool(tf_1h.get("volume_surge"))
+
+    pump_dump_15m = tf_15m.get("pump_dump_risk", "LOW")
+    pump_dump_1h = tf_1h.get("pump_dump_risk", "LOW")
+
+    # 2) تحضير بيانات Coinglass
+    coinglass = coinglass or {}
+    cg_oi = (coinglass.get("open_interest") or {})
+    cg_funding = (coinglass.get("funding") or {})
+    cg_liq = (coinglass.get("liquidation") or {})
+
+    oi_bias = cg_oi.get("oi_bias", "NEUTRAL")
+    oi_chg = cg_oi.get("oi_change_24h")
+    try:
+        oi_chg = float(oi_chg) if oi_chg is not None else 0.0
+    except Exception:
+        oi_chg = 0.0
+
+    funding_rate = cg_funding.get("rate")
+    try:
+        funding_rate = float(funding_rate) if funding_rate is not None else None
+    except Exception:
+        funding_rate = None
+    funding_severity = cg_funding.get("severity") or "LOW"
+
+    liq_bias = cg_liq.get("bias") or "NONE"
+    try:
+        liq_intensity = float(cg_liq.get("intensity") or 0.0)
+    except Exception:
+        liq_intensity = 0.0
+    liq_intensity = max(0.0, min(1.0, liq_intensity))
+
+    # 3) Binance Sentiment (إن وجد)
+    sentiment_bias = None
+    sentiment_strength = 0.0
+    if binance_sentiment:
+        sentiment_bias = binance_sentiment.get("bias")
+        try:
+            sentiment_strength = float(binance_sentiment.get("strength") or 0.0)
+        except Exception:
+            sentiment_strength = 0.0
+
+    # -----------------------------------
+    # بناء نقاط BUY / SELL
+    # -----------------------------------
+    buy_points = 0.0
+    sell_points = 0.0
+    notes: List[str] = []
+
+    # (A) Price Velocity
+    if change_15m > 0.7:
+        buy_points += 10.0
+        notes.append(f"Price +{change_15m:.2f}% على 15m → ضغط شراء.")
+    elif change_15m < -0.7:
+        sell_points += 10.0
+        notes.append(f"Price {change_15m:.2f}% على 15m → ضغط بيع.")
+
+    # 1h للتأكيد
+    if change_1h > 1.5:
+        buy_points += 5.0
+        notes.append(f"Price +{change_1h:.2f}% على 1h يدعم الشراء.")
+    elif change_1h < -1.5:
+        sell_points += 5.0
+        notes.append(f"Price {change_1h:.2f}% على 1h يدعم البيع.")
+
+    # (B) Volume Surge
+    if vol_surge_15m or vol_surge_1h:
+        if change_15m > 0:
+            buy_points += 8.0
+            notes.append("Volume Surge على 15m مع ارتفاع السعر → Flow شراء.")
+        elif change_15m < 0:
+            sell_points += 8.0
+            notes.append("Volume Surge على 15m مع هبوط السعر → Flow بيع.")
+        else:
+            buy_points += 2.0
+            sell_points += 2.0
+            notes.append("Volume Surge بدون اتجاه سعري واضح.")
+
+    # (C) Open Interest Dynamics
+    if oi_bias == "LEVERAGE_UP" and abs(oi_chg) > 0.5:
+        if change_15m > 0:
+            buy_points += 10.0
+            notes.append("OI ↑ مع السعر ↑ → دخول لونغات جديدة (Bullish Flow).")
+        elif change_15m < 0:
+            sell_points += 10.0
+            notes.append("OI ↑ مع السعر ↓ → دخول شورتات جديدة (Bearish Flow).")
+    elif oi_bias == "LEVERAGE_DOWN" and abs(oi_chg) > 0.5:
+        if change_15m > 0 or change_15m < 0:
+            buy_points += 2.0
+            sell_points += 2.0
+            notes.append("OI ↓ مع حركة السعر → خروج مراكز (Weak Flow).")
+
+    # (D) Funding Shift
+    if funding_severity in ("HIGH", "EXTREME") and isinstance(funding_rate, (int, float)):
+        if funding_rate > 0:
+            sell_points += 5.0
+            notes.append("Funding موجب عالي → السوق مزدحم لونغ.")
+        elif funding_rate < 0:
+            buy_points += 5.0
+            notes.append("Funding سالب عالي → السوق مزدحم شورت.")
+
+    # (E) Liquidations
+    if liq_intensity > 0.2 and liq_bias != "NONE":
+        if "SHORT" in liq_bias:
+            buy_points += 6.0 * liq_intensity
+            notes.append(f"Liquidations SHORT_WASHOUT (intensity={liq_intensity:.2f}) → دعم للشراء.")
+        elif "LONG" in liq_bias:
+            sell_points += 6.0 * liq_intensity
+            notes.append(f"Liquidations LONG_WASHOUT (intensity={liq_intensity:.2f}) → دعم للبيع.")
+
+    # (F) Binance Sentiment (اختياري)
+    if sentiment_bias and sentiment_strength > 5:
+        strength_norm = min(sentiment_strength / 50.0, 1.0)
+        if sentiment_bias == "LONG":
+            buy_points += 4.0 * strength_norm
+            notes.append(f"Binance Sentiment يميل للـ LONG (strength={sentiment_strength:.1f}).")
+        elif sentiment_bias == "SHORT":
+            sell_points += 4.0 * strength_norm
+            notes.append(f"Binance Sentiment يميل للـ SHORT (strength={sentiment_strength:.1f}).")
+
+    # -----------------------------------
+    # حساب السكور والباياس
+    # -----------------------------------
+    net_flow = buy_points - sell_points
+    flow_score = 50.0 + net_flow
+    flow_score = max(0.0, min(100.0, flow_score))
+
+    if flow_score >= 55 and net_flow > 3:
+        flow_bias = "BUY"
+    elif flow_score >= 55 and net_flow < -3:
+        flow_bias = "SELL"
+    else:
+        flow_bias = "NEUTRAL"
+
+    # -----------------------------------
+    # تحديد حالة التدفق (Flow State)
+    # -----------------------------------
+    exhaustion = False
+    if (
+        abs(change_1h) >= 3.0
+        or pump_dump_15m == "HIGH"
+        or pump_dump_1h == "HIGH"
+        or funding_severity == "EXTREME"
+    ):
+        exhaustion = True
+
+    if exhaustion:
+        flow_state = "EXHAUSTION"
+    else:
+        if (
+            abs(change_15m) < 0.3
+            and not vol_surge_15m
+            and abs(oi_chg) < 0.3
+            and liq_intensity < 0.1
+        ):
+            flow_state = "CALM"
+        else:
+            if (
+                abs(change_15m) >= 1.0
+                and (vol_surge_15m or vol_surge_1h)
+                and abs(oi_chg) >= 0.8
+            ):
+                flow_state = "EXPLOSION"
+            else:
+                flow_state = "BUILD_UP"
+
+    return {
+        "flow_score": round(float(flow_score), 2),
+        "flow_bias": flow_bias,
+        "flow_state": flow_state,
+        "buy_points": round(buy_points, 2),
+        "sell_points": round(sell_points, 2),
+        "change_15m": change_15m,
+        "change_1h": change_1h,
+        "oi_change_24h": oi_chg,
+        "oi_bias": oi_bias,
+        "funding_severity": funding_severity,
+        "funding_rate": funding_rate,
+        "liq_bias": liq_bias,
+        "liq_intensity": liq_intensity,
+        "sentiment_bias": sentiment_bias,
+        "sentiment_strength": sentiment_strength,
+        "notes": notes,
+    }
+
 # =========================
 # نقطة الدخول الرئيسية
 # =========================
@@ -2132,6 +2343,41 @@ def generate_signal(
                 f"Binance Sentiment → حسابات الفيوتشر تميل للـ SHORT بقوة تقريبية {bs_strength:.1f} نقطة."
             )
 
+        # بعد حساب tf_results + coinglass + binance_sentiment + global_intel ...
+    # مباشرة بعد combine_timeframes وقبل بناء الـ result النهائي:
+
+    # ...
+    combined = combine_timeframes(
+        tf_results,
+        arkham_intel=arkham_intel,
+        orderbook_intel=orderbook_intel,
+        binance_sentiment=binance_sentiment,
+        mode=mode,
+    )
+
+    combined["global_intel"] = global_intel
+    combined["onchain_intel"] = onchain_intel
+
+    # 3.x) Flow Engine – B7A Flow Intel
+    try:
+        flow_intel = build_flow_intel(
+            tf_results,
+            coinglass if use_coinglass else None,
+            binance_sentiment,
+            last_close,
+        )
+    except Exception as e:
+        print("Flow Engine error:", e)
+        flow_intel = {
+            "flow_score": 50.0,
+            "flow_bias": "NEUTRAL",
+            "flow_state": "CALM",
+            "notes": [],
+        }
+
+    # نخزن الـ Flow داخل decision + النتيجة النهائية
+    combined["flow"] = flow_intel
+
     # 📊 Coinglass Intel (لو متوفر)
     if coinglass:
         try:
@@ -2223,6 +2469,7 @@ def generate_signal(
         "onchain_intel": combined.get("onchain_intel"),
         "global_intel": combined.get("global_intel"),
         "is_ultra": combined.get("is_ultra", False),
+        "flow": flow_intel, 
 
     }
 

@@ -188,6 +188,14 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
             safe_r = escape(str(r))  # هنا نهرب أي `<` أو `>`
             msg.append(f"• {safe_r}")
 
+        if flow:
+        msg.append("")
+        msg.append("🌊 <b>Flow Snapshot</b>")
+        msg.append(
+            f"• Flow: <b>{flow_bias}</b> | Score: <b>{float(flow_score or 50):.0f}</b> | State: <b>{flow_state}</b>"
+        )
+
+
     return "\n".join(msg)
 
 
@@ -200,6 +208,12 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
     tf_data = signal_data.get("timeframes", {})
     reason = signal_data.get("reason", "")
 
+    flow = decision.get("flow") or signal_data.get("flow") or {}
+    flow_score = flow.get("flow_score")
+    flow_bias = flow.get("flow_bias")
+    flow_state = flow.get("flow_state")
+
+
     liquidity_bias = decision.get("liquidity_bias") or signal_data.get("liquidity_bias")
     liquidity_score = decision.get("liquidity_score") or signal_data.get("liquidity_score")
 
@@ -209,6 +223,18 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
 
     lines: List[str] = []
 
+       # 🌊 B7A Flow Engine
+    if flow:
+        lines.append("<b>🌊 B7A Flow Engine</b>")
+        lines.append(
+            f"• Flow Bias: <b>{flow_bias}</b> | Flow Score: <b>{float(flow_score or 50):.0f}</b> | State: <b>{flow_state}</b>"
+        )
+        # نعرض ملاحظة وحده أو اثنتين من الـ notes لو موجودة
+        notes = flow.get("notes") or []
+        if notes:
+            lines.append("• Hint: " + str(notes[0]))
+        lines.append("")  # سطر فاصل
+        
     # 💧 السيولة
     lines.append("<b>💧 السيولة (Liquidity)</b>")
     lines.append(

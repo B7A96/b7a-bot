@@ -1087,6 +1087,56 @@ def combine_timeframes(
 
     combined_score = max(0.0, min(100.0, combined_score))
 
+    # =========================
+    # B7A Flow Engine – Decision Modifier
+    # =========================
+    flow = combined.get("flow", {}) or {}
+
+    flow_score = float(flow.get("flow_score", 50))
+    flow_bias = flow.get("flow_bias", "NEUTRAL")
+    flow_state = flow.get("flow_state", "CALM")
+
+    # نجهز الشيلد إن لم يكن موجود
+    shield_active = combined.get("shield_active", False)
+    shield_suggest_no_trade = combined.get("shield_suggest_no_trade", False)
+    shield_reasons = combined.get("shield_reasons", []) or []
+
+    # 1) Flow Exhaustion = عقوبة
+    if flow_state == "EXHAUSTION":
+        combined_score -= 7
+        shield_active = True
+        shield_reasons.append("Flow State = EXHAUSTION (حركة متعبة)")
+
+    # 2) Flow مخالف للاتجاه = عقوبة قوية + No Trade
+    if action == "BUY" and flow_bias == "SELL":
+        combined_score -= 12
+        shield_active = True
+        shield_suggest_no_trade = True
+        shield_reasons.append("Flow Bias SELL ضد صفقة BUY")
+
+    if action == "SELL" and flow_bias == "BUY":
+        combined_score -= 12
+        shield_active = True
+        shield_suggest_no_trade = True
+        shield_reasons.append("Flow Bias BUY ضد صفقة SELL")
+
+    # 3) Flow داعم = مكافأة
+    if flow_state in ("BUILD_UP", "EXPLOSION"):
+        if (action == "BUY" and flow_bias == "BUY") or (
+            action == "SELL" and flow_bias == "SELL"
+        ):
+            combined_score += 6
+
+    # نعيد قصّ السكور ضمن [0,100]
+    combined_score = max(0.0, min(100.0, combined_score))
+
+    # نرجع القيم للـ combined
+    combined["score"] = combined_score
+    combined["shield_active"] = shield_active
+    combined["shield_suggest_no_trade"] = shield_suggest_no_trade
+    combined["shield_reasons"] = shield_reasons
+
+
     # -------- تمدد عن EMA200 + فلتر حماية --------
     def _extended_side(tf_name: str) -> str:
         data = tf_data.get(tf_name, {})

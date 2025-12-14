@@ -12,6 +12,8 @@ from .analytics import performance_intel
 from .intel_hub import get_global_intel
 from .onchain_intel import get_onchain_intel
 
+# ✅ Flow Engine خارجي فقط
+from bot.flow_engine import compute_flow_engine
 
 
 # =========================
@@ -21,7 +23,6 @@ from .onchain_intel import get_onchain_intel
 BINANCE_SPOT_BASE_URL = "https://api.binance.com"
 BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 
-# الفريمات اللي نستخدمها للتحليل
 TIMEFRAMES = {
     "15m": "15m",
     "1h": "1h",
@@ -52,11 +53,11 @@ def get_arkham_intel(symbol: str) -> Dict[str, Any]:
     حالياً ترجع قيم محايدة، لاحقاً نستبدلها بنداءات API الحقيقية.
     """
     return {
-        "whale_inflow_score": 0.0,      # قوة دخول حيتان (0 - 100)
-        "whale_outflow_score": 0.0,     # قوة خروج حيتان (0 - 100)
+        "whale_inflow_score": 0.0,
+        "whale_outflow_score": 0.0,
         "smart_money_bias": "NEUTRAL",  # UP / DOWN / NEUTRAL
-        "cex_inflow_score": 0.0,        # عملات داخلة للمنصات (احتمال بيع)
-        "cex_outflow_score": 0.0,       # عملات خارجة من المنصات (احتمال تجميع)
+        "cex_inflow_score": 0.0,
+        "cex_outflow_score": 0.0,
         "intel_confidence": "LOW",      # LOW / MEDIUM / HIGH
     }
 
@@ -76,7 +77,7 @@ def fetch_binance_sentiment(symbol: str) -> Dict[str, Any]:
     url = f"{BINANCE_FUTURES_BASE_URL}/futures/data/topLongShortAccountRatio"
     params = {
         "symbol": symbol_norm,
-        "period": "5m",   # فترة قصيرة تعطي إحساس لحظي
+        "period": "5m",
         "limit": 50,
     }
 
@@ -199,7 +200,6 @@ def fetch_orderbook(symbol: str, limit: int = 100) -> Dict[str, Any]:
     bids_raw = data.get("bids", [])
     asks_raw = data.get("asks", [])
 
-    # كل عنصر: [price, qty]
     bids = [(float(p), float(q)) for p, q in bids_raw]
     asks = [(float(p), float(q)) for p, q in asks_raw]
 
@@ -227,7 +227,6 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
             "ask_walls": [],
         }
 
-    # نستخدم الكميات (qty) لقياس الضغط
     total_bid = sum(q for _, q in bids)
     total_ask = sum(q for _, q in asks)
 
@@ -241,7 +240,6 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
             "ask_walls": [],
         }
 
-    # Imbalance بين جانب المشترين والبائعين
     imbalance = (total_bid - total_ask) / (total_bid + total_ask)
 
     if imbalance > 0.15:
@@ -253,11 +251,10 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
 
     score = max(0.0, min(100.0, abs(imbalance) * 100.0))
 
-    # نحدد "جدران" السيولة (Walls) – مستويات كميتها كبيرة جداً نسبياً
     bid_walls = []
     ask_walls = []
     if total_bid > 0:
-        bid_threshold = 0.03 * total_bid  # أي مستوى > 3% من إجمالي جانب الـ Bids
+        bid_threshold = 0.03 * total_bid
         for price, qty in bids:
             if qty >= bid_threshold:
                 bid_walls.append({"price": price, "qty": qty})
@@ -268,7 +265,6 @@ def analyse_orderbook(symbol_norm: str, limit: int = 100) -> Dict[str, Any]:
             if qty >= ask_threshold:
                 ask_walls.append({"price": price, "qty": qty})
 
-    # نرتبهم من الأكبر للأصغر ونأخذ أهم 5 فقط
     bid_walls = sorted(bid_walls, key=lambda x: x["qty"], reverse=True)[:5]
     ask_walls = sorted(ask_walls, key=lambda x: x["qty"], reverse=True)[:5]
 
@@ -305,7 +301,7 @@ def log_trade(data: Dict[str, Any]):
                     "grade", "score", "confidence",
                     "pump_risk", "market_regime", "liquidity_bias",
                     "no_trade",
-                    "result",  # WIN / LOSS (تترك فاضية الآن)
+                    "result",
                 ]
             )
 
@@ -327,7 +323,7 @@ def log_trade(data: Dict[str, Any]):
                 decision.get("market_regime"),
                 decision.get("liquidity_bias"),
                 decision.get("no_trade"),
-                data.get("result", ""),  # تقدر تضيفها لاحقاً لو حبيت
+                data.get("result", ""),
             ]
         )
 
@@ -443,9 +439,6 @@ def atr(
     close: np.ndarray,
     period: int = 14,
 ) -> np.ndarray:
-    """
-    Average True Range لقياس تذبذب السعر.
-    """
     if len(close) < period + 1:
         raise ValueError("Not enough data for ATR")
 
@@ -476,9 +469,6 @@ def _detect_swings(
     left: int = 2,
     right: int = 2,
 ) -> Tuple[List[int], List[int]]:
-    """
-    يحدد swing highs و swing lows بسيطة.
-    """
     n = len(high)
     swing_highs: List[int] = []
     swing_lows: List[int] = []
@@ -493,9 +483,6 @@ def _detect_swings(
 
 
 def _cluster_levels(prices: List[float], tolerance: float = 0.0015) -> List[Dict[str, Any]]:
-    """
-    يجمع القمم / القيعان المتقاربة في مستوى واحد (zone).
-    """
     if not prices:
         return []
     prices_sorted = sorted(prices)
@@ -515,9 +502,6 @@ def _cluster_levels(prices: List[float], tolerance: float = 0.0015) -> List[Dict
 
 
 def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]:
-    """
-    يبني خريطة سيولة بسيطة من القمم والقيعان.
-    """
     high = ohlcv["high"]
     low = ohlcv["low"]
     close = ohlcv["close"]
@@ -536,7 +520,6 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
     above_strength = 0.0
     below_strength = 0.0
 
-    # مستويات فوق السعر (Buy-side liquidity)
     for lvl in high_levels:
         price = float(lvl["price"])
         count = int(lvl["count"])
@@ -564,7 +547,6 @@ def build_liquidity_map(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, An
             }
         )
 
-    # مستويات تحت السعر (Sell-side liquidity)
     for lvl in low_levels:
         price = float(lvl["price"])
         count = int(lvl["count"])
@@ -631,13 +613,11 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     info: Dict[str, Any] = {"timeframe": name}
 
-    # EMA 200
     try:
         ema200 = ema(close, 200)[-1]
     except ValueError:
         ema200 = float("nan")
 
-    # RSI
     rsi_arr = None
     try:
         rsi_arr = rsi(close, 14)
@@ -646,7 +626,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         rsi_last = float("nan")
         rsi_arr = None
 
-    # MACD
     try:
         macd_line, sig_line = macd(close)
         macd_last = float(macd_line[-1])
@@ -655,7 +634,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         macd_last = float("nan")
         macd_signal_last = float("nan")
 
-    # Bollinger Bands
     try:
         lower_bb, mid_bb, upper_bb = bollinger_bands(close)
         lower_last = float(lower_bb[-1])
@@ -664,7 +642,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         lower_last = float("nan")
         upper_last = float("nan")
 
-    # VWAP
     vwap_arr = vwap(high, low, close, volume)
     vwap_last = float(vwap_arr[-1])
 
@@ -677,14 +654,12 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     last_close = float(close[-1])
 
-    # اتجاه بالنسبة للـ EMA200
     if not np.isnan(ema200):
         if last_close > ema200:
             bullish_points += 1
         else:
             bearish_points += 1
 
-    # سلوك RSI
     if not np.isnan(rsi_last):
         if 50 <= rsi_last <= 70:
             bullish_points += 1
@@ -693,14 +668,12 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
         elif rsi_last < 30:
             bullish_points += 1
 
-    # MACD Cross
     if not np.isnan(macd_last) and not np.isnan(macd_signal_last):
         if macd_last > macd_signal_last:
             bullish_points += 1
         else:
             bearish_points += 1
 
-    # Bollinger Touch
     if not np.isnan(lower_last) and not np.isnan(upper_last):
         if last_close <= lower_last:
             bullish_points += 1
@@ -716,15 +689,13 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     except Exception:
         atr_last = float("nan")
 
-    distance_from_ema200 = (
-        abs(last_close - ema200) if not np.isnan(ema200) else 0.0
-    )
+    distance_from_ema200 = abs(last_close - ema200) if not np.isnan(ema200) else 0.0
 
     if (
         not np.isnan(ema200)
         and not np.isnan(atr_last)
         and distance_from_ema200 > atr_last * 1.2
-        and atr_last > (0.002 * last_close)  # ATR > 0.2% من السعر
+        and atr_last > (0.002 * last_close)
     ):
         market_regime = "TRENDING"
     else:
@@ -746,7 +717,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
 
     if last_close > recent_high and change_1 > 0:
         is_breakout_up = True
-
     if last_close < recent_low and change_1 < 0:
         is_breakout_down = True
 
@@ -757,35 +727,25 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     has_bear_div = False
 
     if rsi_arr is not None and len(close) >= 20:
-        # نستخدم نقطة قبل 10 شموع كنقطة مقارنة بسيطة
         prev_idx = -10
-
         prev_low = close[prev_idx]
         curr_low = close[-1]
         prev_rsi = rsi_arr[prev_idx]
         curr_rsi = rsi_arr[-1]
 
         if not np.isnan(prev_rsi) and not np.isnan(curr_rsi):
-            # Bullish Divergence: السعر ينزل، RSI يطلع
             if curr_low < prev_low and curr_rsi > prev_rsi:
                 has_bull_div = True
-
-            # Bearish Divergence: السعر يطلع، RSI ينزل
             if curr_low > prev_low and curr_rsi < prev_rsi:
                 has_bear_div = True
 
-    # نكافئ/نعاقب حسب الدايفرجنس
     if has_bull_div:
         bullish_points += 1
     if has_bear_div:
         bearish_points += 1
 
-    # =========================
-    # Trend Score + Pump/Dump
-    # =========================
     trend_score = (bullish_points - bearish_points) * 10 + 50
 
-    # تعديل بسيط للترند حسب وضع السوق والاختراق
     if market_regime == "TRENDING" and (is_breakout_up or is_breakout_down):
         trend_score += 5
     if market_regime == "RANGING" and (is_breakout_up or is_breakout_down):
@@ -799,7 +759,6 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
     if abs(change_1) > 6 and vol_surge:
         pump_dump_risk = "HIGH"
 
-    # خريطة السيولة لهذا الفريم
     liq_map = build_liquidity_map(ohlcv, name)
     liq_bias = liq_map.get("bias", "FLAT")
     liq_score = liq_map.get("score", 0.0)
@@ -820,14 +779,13 @@ def analyse_timeframe(ohlcv: Dict[str, np.ndarray], name: str) -> Dict[str, Any]
             "change_1": change_1,
             "change_4": change_4,
             "trend_score": trend_score,
-            "score": trend_score, 
+            "score": trend_score,
             "pump_dump_risk": pump_dump_risk,
             "liquidity": liq_map,
             "liq_bias": liq_bias,
             "liq_score": liq_score,
             "liq_above": liq_above,
             "liq_below": liq_below,
-            # إضافات الذكاء الجديد
             "market_regime": market_regime,
             "regime": market_regime,
             "is_breakout_up": is_breakout_up,
@@ -869,7 +827,6 @@ def combine_timeframes(
     if mode not in ("safe", "balanced", "momentum"):
         mode = "balanced"
 
-    # -------- أوزان الفريمات --------
     weights = {"15m": 0.2, "1h": 0.3, "4h": 0.3, "1d": 0.2}
 
     score_sum = 0.0
@@ -903,45 +860,36 @@ def combine_timeframes(
         elif tf_trend == "BEARISH":
             bearish_votes += w
 
-        # Pump/Dump
         risk = data.get("pump_dump_risk", "LOW")
         if risk == "HIGH":
             max_pump_risk = "HIGH"
         elif risk == "MEDIUM" and max_pump_risk != "HIGH":
             max_pump_risk = "MEDIUM"
 
-        # السيولة
         liq_above_total += data.get("liq_above", 0.0) * w
         liq_below_total += data.get("liq_below", 0.0) * w
 
-        # وضع السوق
         regime = data.get("market_regime")
         if regime == "TRENDING":
             trending_weight += w
         elif regime == "RANGING":
             ranging_weight += w
 
-        # اختراقات
         if data.get("is_breakout_up"):
             breakout_up_weight += w
         if data.get("is_breakout_down"):
             breakout_down_weight += w
 
-        # دايفرجنس
         if data.get("has_bull_div"):
             bull_div_weight += w
         if data.get("has_bear_div"):
             bear_div_weight += w
 
-    if total_weight > 0:
-        base_score = score_sum / total_weight
-    else:
-        base_score = 50.0
+    base_score = (score_sum / total_weight) if total_weight > 0 else 50.0
 
     bull_align = bullish_votes / total_weight if total_weight > 0 else 0.0
     bear_align = bearish_votes / total_weight if total_weight > 0 else 0.0
 
-    # اتجاه عام
     if bullish_votes > bearish_votes:
         global_trend = "BULLISH"
     elif bearish_votes > bullish_votes:
@@ -949,7 +897,6 @@ def combine_timeframes(
     else:
         global_trend = "RANGING"
 
-    # وضع السوق العام
     if trending_weight > ranging_weight * 1.1:
         global_regime = "TRENDING"
     elif ranging_weight > trending_weight * 1.1:
@@ -957,7 +904,6 @@ def combine_timeframes(
     else:
         global_regime = "MIXED"
 
-    # انحياز السيولة
     if liq_above_total + liq_below_total > 0:
         liq_imbalance = (liq_above_total - liq_below_total) / (liq_above_total + liq_below_total)
         if liq_imbalance > 0.2:
@@ -968,11 +914,9 @@ def combine_timeframes(
             liquidity_bias = "FLAT"
         liquidity_score = abs(liq_imbalance) * 100.0
     else:
-        liq_imbalance = 0.0
         liquidity_bias = "FLAT"
         liquidity_score = 0.0
 
-    # RSI عالي الفريمات
     rsi_1h = tf_data.get("1h", {}).get("rsi")
     rsi_4h = tf_data.get("4h", {}).get("rsi")
     rsi_1d = tf_data.get("1d", {}).get("rsi")
@@ -984,9 +928,8 @@ def combine_timeframes(
         return x is not None and not np.isnan(x) and x < 30.0
 
     overbought = any(_is_overbought(r) for r in [rsi_1h, rsi_4h, rsi_1d])
-    oversold = any(_is_oversold(r)   for r in [rsi_1h, rsi_4h, rsi_1d])
+    oversold = any(_is_oversold(r) for r in [rsi_1h, rsi_4h, rsi_1d])
 
-    # -------- تعديل السكور الكلاسيكي --------
     combined_score = base_score
 
     if global_regime == "TRENDING":
@@ -1017,7 +960,6 @@ def combine_timeframes(
     elif liquidity_bias == "UP" and global_trend == "BEARISH":
         combined_score -= 3
 
-    # -------- Arkham / Orderbook / Sentiment --------
     orderbook_bias = "FLAT"
     orderbook_score = 0.0
     sentiment_bias = "NEUTRAL"
@@ -1087,22 +1029,16 @@ def combine_timeframes(
 
     combined_score = max(0.0, min(100.0, combined_score))
 
-
-
-    # -------- تمدد عن EMA200 + فلتر حماية --------
     def _extended_side(tf_name: str) -> str:
         data = tf_data.get(tf_name, {})
         c = data.get("close")
-        ema200 = data.get("ema200")
-        if c is None or ema200 is None or np.isnan(ema200) or ema200 == 0:
+        ema200_v = data.get("ema200")
+        if c is None or ema200_v is None or np.isnan(ema200_v) or ema200_v == 0:
             return "NONE"
-        dist_pct = abs(c - ema200) / abs(ema200) * 100.0
+        dist_pct = abs(c - ema200_v) / abs(ema200_v) * 100.0
         if dist_pct < 8.0:
             return "NONE"
-        if c > ema200:
-            return "UP"
-        else:
-            return "DOWN"
+        return "UP" if c > ema200_v else "DOWN"
 
     ext_4h = _extended_side("4h")
     ext_1d = _extended_side("1d")
@@ -1110,42 +1046,31 @@ def combine_timeframes(
     extended_down = (ext_4h == "DOWN") or (ext_1d == "DOWN")
 
     strong_bull_anchor = (
-        tf_data.get("4h", {}).get("trend") == "BULLISH"
-        and tf_data.get("4h", {}).get("trend_score", 50) >= 60
-    ) or (
-        tf_data.get("1d", {}).get("trend") == "BULLISH"
-        and tf_data.get("1d", {}).get("trend_score", 50) >= 55
+        (tf_data.get("4h", {}).get("trend") == "BULLISH" and tf_data.get("4h", {}).get("trend_score", 50) >= 60)
+        or (tf_data.get("1d", {}).get("trend") == "BULLISH" and tf_data.get("1d", {}).get("trend_score", 50) >= 55)
     )
 
     strong_bear_anchor = (
-        tf_data.get("4h", {}).get("trend") == "BEARISH"
-        and tf_data.get("4h", {}).get("trend_score", 50) >= 60
-    ) or (
-        tf_data.get("1d", {}).get("trend") == "BEARISH"
-        and tf_data.get("1d", {}).get("trend_score", 50) >= 55
+        (tf_data.get("4h", {}).get("trend") == "BEARISH" and tf_data.get("4h", {}).get("trend_score", 50) >= 60)
+        or (tf_data.get("1d", {}).get("trend") == "BEARISH" and tf_data.get("1d", {}).get("trend_score", 50) >= 55)
     )
 
     safety_block_buy = False
     safety_block_sell = False
-
-    # في SAFE فقط نفعّل أقوى حماية
     if mode == "safe":
         if global_trend == "BULLISH" and extended_up and overbought:
             safety_block_buy = True
         if global_trend == "BEARISH" and extended_down and oversold:
             safety_block_sell = True
 
-    # -------- بناء LongScore / ShortScore من السكور الكلي + المحاذاة --------
     long_score = combined_score
-    short_score = 100.0 - combined_score  # مبدئياً معكوس السكور
+    short_score = 100.0 - combined_score
 
-    # تعزيز/تضعيف حسب محاذاة الفريمات
     long_score += bull_align * 20.0
     long_score -= bear_align * 10.0
     short_score += bear_align * 20.0
     short_score -= bull_align * 10.0
 
-    # تأثير الترند العام
     if global_trend == "BULLISH":
         long_score += 5.0
         short_score -= 3.0
@@ -1153,96 +1078,76 @@ def combine_timeframes(
         short_score += 5.0
         long_score -= 3.0
 
-    # تأثير انحياز السيولة
     if liquidity_bias == "UP":
         long_score += 3.0
     elif liquidity_bias == "DOWN":
         short_score += 3.0
 
-    # حماية من تمدد مبالغ فيه عن EMA200 (طمع زائد)
     if extended_up and overbought:
         long_score -= 8.0
     if extended_down and oversold:
         short_score -= 8.0
 
-    # Clip داخل 0-100
     long_score = max(0.0, min(100.0, long_score))
     short_score = max(0.0, min(100.0, short_score))
 
-    # -------- thresholds لكل مود (مبنية على Long/Short) --------
     if mode == "safe":
-        # SAFE = لونغ محافظ جداً، شورت نادر فقط في ترند هابط قوي
         long_min = 70.0
         short_min = 80.0
         gray_low = 52.0
         gray_high = 70.0
     elif mode == "momentum":
-        # MOMENTUM = هجومي، نفتح الباب للونغ/شورت مومنتوم
         long_min = 58.0
         short_min = 58.0
         gray_low = 48.0
         gray_high = 70.0
-    else:  # balanced
-        # BALANCED = توازن حقيقي بين لونغ وشورت
+    else:
         long_min = 65.0
         short_min = 60.0
         gray_low = 50.0
         gray_high = 70.0
 
-
-    # إدارة overbought/oversold حسب ترند السوق
     sell_oversold_block = oversold and global_trend != "BULLISH"
     buy_overbought_block = overbought and global_trend != "BULLISH"
 
     action = "WAIT"
 
-    # --- BUY مبني على LongScore ---
     if (
         long_score >= long_min
         and long_score >= short_score
         and bull_align >= 0.40
         and not buy_overbought_block
         and max_pump_risk != "HIGH"
-        and (
-            strong_bull_anchor
-            or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("UP", "FLAT"))
-        )
+        and (strong_bull_anchor or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("UP", "FLAT")))
     ):
         action = "BUY"
 
-    # --- SELL مبني على ShortScore ---
     if (
         short_score >= short_min
         and short_score > long_score
         and bear_align >= 0.30
         and not sell_oversold_block
-        and (
-            strong_bear_anchor
-            or (global_trend == "BEARISH" and liquidity_bias in ("DOWN", "FLAT"))
-        )
+        and (strong_bear_anchor or (global_trend == "BEARISH" and liquidity_bias in ("DOWN", "FLAT")))
     ):
         action = "SELL"
 
-
-    # --- المنطقة الرمادية (للطرفين) ---
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
-            and bull_align >= max(0.45, 0.40)
+            and bull_align >= 0.45
             and not buy_overbought_block
             and (strong_bull_anchor or breakout_up_weight > 0.20)
         ):
             action = "BUY"
         elif (
             liquidity_bias == "DOWN"
-            and bear_align >= max(0.40, 0.30)
+            and bear_align >= 0.40
             and not sell_oversold_block
             and (strong_bear_anchor or breakout_down_weight > 0.20)
         ):
             action = "SELL"
 
-
-    # --- Pump Sniper للمومنتوم: فريم 15m ---
+    # ✅ Pump Sniper للمومنتوم (مرة واحدة فقط)
     pump_momentum = False
     if mode == "momentum" and max_pump_risk != "HIGH":
         tf15 = tf_data.get("15m", {})
@@ -1252,26 +1157,9 @@ def combine_timeframes(
             and tf15.get("volume_surge")
             and bull_align >= 0.35
         ):
-            # حتى لو السكور مو مثالي، نعطي BUY مومنتوم
             action = "BUY"
             pump_momentum = True
 
-
-    # --- Pump Sniper للمومنتوم: فريم 15m ---
-    pump_momentum = False
-    if mode == "momentum" and max_pump_risk != "HIGH":
-        tf15 = tf_data.get("15m", {})
-        if (
-            tf15.get("market_regime") == "TRENDING"
-            and tf15.get("is_breakout_up")
-            and tf15.get("volume_surge")
-            and bull_align >= 0.35
-        ):
-            # حتى لو السكور مو مثالي، نعطي BUY مومنتوم
-            action = "BUY"
-            pump_momentum = True
-
-    # --- الثقة ---
     distance = abs(combined_score - 50.0)
     if distance >= 22:
         confidence = "HIGH"
@@ -1280,17 +1168,14 @@ def combine_timeframes(
     else:
         confidence = "LOW"
 
-    # حماية من Pump/Dump HIGH
     if max_pump_risk == "HIGH" and action in ("BUY", "SELL"):
         action = "WAIT"
 
-    # تطبيق فلتر الحماية
     if safety_block_buy and action == "BUY":
         action = "WAIT"
     if safety_block_sell and action == "SELL":
         action = "WAIT"
 
-    # -------- Grade + No-Trade --------
     if (
         combined_score >= 78
         and confidence == "HIGH"
@@ -1321,7 +1206,7 @@ def combine_timeframes(
     elif mode == "balanced":
         if grade == "C" or confidence == "LOW" or liquidity_score < 5:
             no_trade = True
-    else:  # momentum
+    else:
         if confidence == "LOW" or liquidity_score < 3:
             no_trade = True
 
@@ -1352,9 +1237,6 @@ def combine_timeframes(
     }
 
 
-
-
-
 # =========================
 # Dynamic ATR Multi-TP
 # =========================
@@ -1366,26 +1248,16 @@ def compute_trade_levels_multi(
     risk_pct: float,
     mode: str = "balanced",
 ) -> Dict[str, Optional[float]]:
-    """
-    يحسب SL + TP1/TP2/TP3 باستخدام ATR من فريم 1h (ولو فشل → 15m)
-    ويعدل المسافات حسب Grade + Score + Mode (SAFE / BALANCED / MOMENTUM).
-    """
-
     mode = (mode or "balanced").lower()
     if mode not in ("safe", "balanced", "momentum"):
         mode = "balanced"
 
-    # نحاول ATR من 1h أولاً
-    anchor_tf = "1h"
-    interval = TIMEFRAMES.get(anchor_tf, "1h")
     atr_value: Optional[float] = None
-
     try:
-        ohlcv = fetch_klines(symbol_norm, interval, limit=200)
+        ohlcv = fetch_klines(symbol_norm, TIMEFRAMES["1h"], limit=200)
         atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
         atr_value = float(atr_vals[-1])
     except Exception:
-        # نحاول 15m
         try:
             ohlcv = fetch_klines(symbol_norm, TIMEFRAMES["15m"], limit=200)
             atr_vals = atr(ohlcv["high"], ohlcv["low"], ohlcv["close"], period=14)
@@ -1394,21 +1266,12 @@ def compute_trade_levels_multi(
             atr_value = None
 
     if atr_value is None or atr_value <= 0:
-        return {
-            "sl": None,
-            "tp1": None,
-            "tp2": None,
-            "tp3": None,
-            "rr1": None,
-            "rr2": None,
-            "rr3": None,
-        }
+        return {"sl": None, "tp1": None, "tp2": None, "tp3": None, "rr1": None, "rr2": None, "rr3": None}
 
     action = decision.get("action")
     grade = decision.get("grade", "C")
     score = float(decision.get("score", 50.0) or 50.0)
 
-    # === Multipliers الأساسية حسب Grade (قبل المود) ===
     if grade == "A+":
         tp_mults = (1.2, 2.0, 3.0)
         base_sl_mult = 1.3
@@ -1419,51 +1282,34 @@ def compute_trade_levels_multi(
         tp_mults = (0.8, 1.5, 2.0)
         base_sl_mult = 1.1
 
-    # لو السكور تحت 70 نخفف الأهداف شوي
     if score < 70:
         tp_mults = tuple(m * 0.9 for m in tp_mults)
 
-    # === تأثير الـ Mode على شكل الصفقة ===
-    # SAFE: SL أوسع، TP أقرب شوي
-    # BALANCED: افتراضي
-    # MOMENTUM: SL أضيق، TP أبعد (أكثر Aggressive)
     if mode == "safe":
-        sl_mode_factor = 1.3   # SL أبعد
-        tp_mode_factor = 0.85  # TP أقرب
+        sl_mode_factor = 1.3
+        tp_mode_factor = 0.85
     elif mode == "momentum":
-        sl_mode_factor = 0.8   # SL أقرب
-        tp_mode_factor = 1.2   # TP أبعد
-    else:  # balanced
+        sl_mode_factor = 0.8
+        tp_mode_factor = 1.2
+    else:
         sl_mode_factor = 1.0
         tp_mode_factor = 1.0
 
-    # مسافة SL: نعتمد أكثر على ATR مع تأثير المود
     sl_dist_atr = atr_value * base_sl_mult * sl_mode_factor
-
-    # ما نبي risk_pct يختفي تمامًا، فنستخدم متوسط بين ATR و نسبة السعر
     sl_dist_pct = price * (risk_pct / 100.0)
     sl_dist = max(sl_dist_atr * 0.7 + sl_dist_pct * 0.3, atr_value * 0.5)
 
-    # مسافات TP بناءً على ATR + المود
     tp_dists = [atr_value * m * tp_mode_factor for m in tp_mults]
 
     if action not in ("BUY", "SELL"):
-        return {
-            "sl": None,
-            "tp1": None,
-            "tp2": None,
-            "tp3": None,
-            "rr1": None,
-            "rr2": None,
-            "rr3": None,
-        }
+        return {"sl": None, "tp1": None, "tp2": None, "tp3": None, "rr1": None, "rr2": None, "rr3": None}
 
     if action == "BUY":
         sl = round(price - sl_dist, 6)
         tp1 = round(price + tp_dists[0], 6)
         tp2 = round(price + tp_dists[1], 6)
         tp3 = round(price + tp_dists[2], 6)
-    else:  # SELL
+    else:
         sl = round(price + sl_dist, 6)
         tp1 = round(price - tp_dists[0], 6)
         tp2 = round(price - tp_dists[1], 6)
@@ -1473,16 +1319,12 @@ def compute_trade_levels_multi(
     rr2 = round(tp_dists[1] / sl_dist, 2) if sl_dist > 0 else None
     rr3 = round(tp_dists[2] / sl_dist, 2) if sl_dist > 0 else None
 
-    return {
-        "sl": sl,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-        "rr1": rr1,
-        "rr2": rr2,
-        "rr3": rr3,
-    }
+    return {"sl": sl, "tp1": tp1, "tp2": tp2, "tp3": tp3, "rr1": rr1, "rr2": rr2, "rr3": rr3}
 
+
+# =========================
+# ULTRA Hacker Filter
+# =========================
 
 def _is_ultra_hacker_signal(
     combined: Dict[str, Any],
@@ -1491,25 +1333,14 @@ def _is_ultra_hacker_signal(
     coinglass: Optional[Dict[str, Any]] = None,
     onchain_intel: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """
-    فلتر ULTRA – صفقات سنايبر عالمية.
-    يعتمد على:
-      - قوة الإشارة نفسها (Score / Confidence / PumpRisk)
-      - توافق الفريمات
-      - Global Intel (اتجاه BTC + Shock Mode)
-      - On-Chain Intel (Dump Risk من BTC + نشاط الشبكة)
-      - Coinglass (Funding / OI / Liquidations)
-    """
-
     action = (combined.get("action") or "").upper()
     if action not in ("BUY", "SELL"):
         return False
 
     score = float(combined.get("score") or 0.0)
     confidence = (combined.get("confidence") or "").upper()
-    pump_risk = (combined.get("pump_dump_risk") or combined.get("pump_dump_risk_label") or "MEDIUM").upper()
+    pump_risk = (combined.get("pump_dump_risk") or "MEDIUM").upper()
 
-    # 1) فلتر أساسي على الإشارة نفسها
     if score < 70:
         return False
     if confidence == "LOW":
@@ -1517,7 +1348,6 @@ def _is_ultra_hacker_signal(
     if pump_risk == "HIGH":
         return False
 
-    # 2) توافق الفريمات
     trends = {tf: (d or {}).get("trend") for tf, d in tf_data.items()}
     regimes = {tf: (d or {}).get("regime") for tf, d in tf_data.items()}
 
@@ -1535,13 +1365,11 @@ def _is_ultra_hacker_signal(
     if trending_cnt < 2:
         return False
 
-    # 3) Global Intel – لا ندخل ضد BTC + لا ندخل وقت Shock
     btc_trend = (global_intel or {}).get("btc_trend", "FLAT")
     shock_mode = bool((global_intel or {}).get("shock_mode"))
     global_mood = float((global_intel or {}).get("global_mood_score") or 50.0)
 
     if shock_mode:
-        # وقت أخبار عنيفة / كراش محتمل → نطفي ULTRA
         return False
 
     if action == "BUY" and btc_trend == "BEARISH" and global_mood < 45:
@@ -1550,38 +1378,31 @@ def _is_ultra_hacker_signal(
     if action == "SELL" and btc_trend == "BULLISH" and global_mood > 55:
         return False
 
-    # 4) On-Chain Intel
     if onchain_intel and onchain_intel.get("available"):
-        # حماية رئيسية من Crash مفاجئ:
         if onchain_intel.get("dump_risk") == "HIGH":
             return False
 
         btc_chain = (onchain_intel.get("btc") or {})
         activity_score = float(btc_chain.get("activity_score") or 50.0)
 
-        # لا نأخذ BUY لو نشاط الشبكة on-chain ميت
         if action == "BUY" and activity_score < 40:
             return False
 
-    # 5) Coinglass Intel – Funding / OI / Liquidations
     if coinglass and coinglass.get("available"):
         funding = (coinglass.get("funding") or {}).get("funding_bias", "NEUTRAL").upper()
         liq_side = (coinglass.get("liquidations") or {}).get("side", "NONE").upper()
         oi_bias = (coinglass.get("open_interest") or {}).get("oi_bias", "NEUTRAL").upper()
 
-        # لا نطارد Long crowded في BUY
         if action == "BUY" and funding == "LONG_CROWDED":
             return False
         if action == "SELL" and funding == "SHORT_CROWDED":
             return False
 
-        # لا ندخل مع تصفية نفس الجهة
         if action == "BUY" and liq_side == "LONG":
             return False
         if action == "SELL" and liq_side == "SHORT":
             return False
 
-        # لا نبيع مع Leverage Up ولا نشتري مع Leverage Down
         if action == "BUY" and oi_bias == "LEVERAGE_DOWN":
             return False
         if action == "SELL" and oi_bias == "LEVERAGE_UP":
@@ -1589,26 +1410,17 @@ def _is_ultra_hacker_signal(
 
     return True
 
+
+# =========================
+# B7A SHIELD (تحذير فقط)
+# =========================
+
 def _apply_shield(
     combined: Dict[str, Any],
     global_intel: Dict[str, Any],
     coinglass: Optional[Dict[str, Any]] = None,
     onchain_intel: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    B7A Shield – وضع الاختبار
-
-    ✦ ما يغيّر BUY/SELL
-    ✦ فقط يضيف:
-        shield_active = True/False
-        shield_suggest_no_trade = True/False
-        shield_reasons = [..]
-
-    عشان نعرف لاحقاً:
-      - أي صفقات كانت الشروط فيها خطرة
-      - وهل فعلاً كانت تخسر كثير
-    """
-
     action = (combined.get("action") or "").upper()
     grade = str(combined.get("grade") or "").upper()
     mode = (combined.get("mode") or "balanced").lower()
@@ -1618,11 +1430,9 @@ def _apply_shield(
 
     gi = global_intel or {}
 
-    # ========== 1) Global / BTC وضع ==========
     shock_mode = bool(gi.get("shock_mode"))
     btc_regime = gi.get("btc_regime", "CHOP")
 
-    # تغيير BTC في 24 ساعة لو متوفر
     try:
         btc_change_1 = float(gi.get("btc_change_1") or 0.0)
     except Exception:
@@ -1643,19 +1453,16 @@ def _apply_shield(
         suggest_no_trade = True
 
     if fg_val is not None:
-        # طمع مفرط
         if action == "BUY" and fg_val >= 85:
             reasons.append(f"Extreme Greed (Fear & Greed = {fg_val}) – لونغ جديد خطير.")
             if mode != "momentum":
                 suggest_no_trade = True
 
-        # خوف مفرط
         if action == "SELL" and fg_val <= 10:
             reasons.append(f"Extreme Fear (Fear & Greed = {fg_val}) – شورت إضافي خطير.")
             if mode == "safe":
                 suggest_no_trade = True
 
-    # ========== 2) On-Chain (اختياري) ==========
     if onchain_intel and onchain_intel.get("available"):
         dump_risk = onchain_intel.get("dump_risk", "MEDIUM")
         if dump_risk == "HIGH":
@@ -1672,7 +1479,6 @@ def _apply_shield(
             reasons.append(f"On-Chain: نشاط BTC ضعيف ({activity_score:.1f}/100) – لونغ غير مفضّل.")
             suggest_no_trade = True
 
-    # ========== 3) Coinglass ==========
     if coinglass and coinglass.get("available"):
         funding = (coinglass.get("funding") or {})
         funding_bias = str(funding.get("funding_bias") or "NEUTRAL").upper()
@@ -1686,7 +1492,6 @@ def _apply_shield(
             if mode != "momentum":
                 suggest_no_trade = True
 
-        # Liquidations
         liq = (coinglass.get("liquidation") or coinglass.get("liquidations") or {})
         liq_bias = str(liq.get("bias") or liq.get("side") or "NONE").upper()
         try:
@@ -1695,13 +1500,10 @@ def _apply_shield(
             liq_intensity = 0.0
 
         if liq_bias in ("LONG_WASHOUT", "SHORT_WASHOUT") and liq_intensity >= 0.7:
-            reasons.append(
-                f"Coinglass: {liq_bias} قوي (intensity={liq_intensity:.2f}) – السوق تحت تصفية."
-            )
+            reasons.append(f"Coinglass: {liq_bias} قوي (intensity={liq_intensity:.2f}) – السوق تحت تصفية.")
             if mode == "safe":
                 suggest_no_trade = True
 
-        # Open Interest
         oi = (coinglass.get("open_interest") or {})
         try:
             oi_chg_24h = float(oi.get("oi_change_24h") or 0.0)
@@ -1709,12 +1511,9 @@ def _apply_shield(
             oi_chg_24h = 0.0
 
         if abs(oi_chg_24h) >= 35.0 and mode == "safe":
-            reasons.append(
-                f"Coinglass: تغير OI {oi_chg_24h:.1f}% خلال 24h – رافعة خطرة على الزوج."
-            )
+            reasons.append(f"Coinglass: تغير OI {oi_chg_24h:.1f}% خلال 24h – رافعة خطرة على الزوج.")
             suggest_no_trade = True
 
-    # ========== 4) السيولة / رينج ==========
     try:
         liq_score = float(combined.get("liquidity_score") or 0.0)
     except Exception:
@@ -1729,223 +1528,12 @@ def _apply_shield(
         reasons.append("سوق متذبذب + Grade ضعيف في SAFE Mode – الانتظار أفضل.")
         suggest_no_trade = True
 
-    # ========== 5) تثبيت النتائج (تحذيري فقط) ==========
     combined["shield_active"] = bool(reasons)
     combined["shield_suggest_no_trade"] = bool(suggest_no_trade)
     combined["shield_reasons"] = reasons
 
     return combined
 
-def build_flow_intel(
-    tf_data: Dict[str, Dict[str, Any]],
-    coinglass: Optional[Dict[str, Any]] = None,
-    binance_sentiment: Optional[Dict[str, Any]] = None,
-    last_price: Optional[float] = None,
-) -> Dict[str, Any]:
-    """
-    B7A Flow Engine V1
-    يقيس اتجاه وقوة تدفق المال (flow_score / flow_bias / flow_state).
-
-    يعتمد على:
-      - سرعة حركة السعر (من فريم 15m + 1h)
-      - تسارع الفوليوم
-      - تغيّر الـ Open Interest
-      - تصفيات العقود (Liquidations)
-      - تغيّر الـ Funding
-      - Binance Sentiment (اختياري)
-    """
-    # 1) تحضير الأساس
-    tf_15m = tf_data.get("15m", {}) or {}
-    tf_1h = tf_data.get("1h", {}) or {}
-
-    change_15m = float(tf_15m.get("change_4") or 0.0)  # آخر ~4 شمعات 15m
-    change_1h = float(tf_1h.get("change_4") or 0.0)
-
-    vol_surge_15m = bool(tf_15m.get("volume_surge"))
-    vol_surge_1h = bool(tf_1h.get("volume_surge"))
-
-    pump_dump_15m = tf_15m.get("pump_dump_risk", "LOW")
-    pump_dump_1h = tf_1h.get("pump_dump_risk", "LOW")
-
-    # 2) تحضير بيانات Coinglass
-    coinglass = coinglass or {}
-    cg_oi = (coinglass.get("open_interest") or {})
-    cg_funding = (coinglass.get("funding") or {})
-    cg_liq = (coinglass.get("liquidation") or {})
-
-    oi_bias = cg_oi.get("oi_bias", "NEUTRAL")
-    oi_chg = cg_oi.get("oi_change_24h")
-    try:
-        oi_chg = float(oi_chg) if oi_chg is not None else 0.0
-    except Exception:
-        oi_chg = 0.0
-
-    funding_rate = cg_funding.get("rate")
-    try:
-        funding_rate = float(funding_rate) if funding_rate is not None else None
-    except Exception:
-        funding_rate = None
-    funding_severity = cg_funding.get("severity") or "LOW"
-
-    liq_bias = cg_liq.get("bias") or "NONE"
-    try:
-        liq_intensity = float(cg_liq.get("intensity") or 0.0)
-    except Exception:
-        liq_intensity = 0.0
-    liq_intensity = max(0.0, min(1.0, liq_intensity))
-
-    # 3) Binance Sentiment (إن وجد)
-    sentiment_bias = None
-    sentiment_strength = 0.0
-    if binance_sentiment:
-        sentiment_bias = binance_sentiment.get("bias")
-        try:
-            sentiment_strength = float(binance_sentiment.get("strength") or 0.0)
-        except Exception:
-            sentiment_strength = 0.0
-
-    # -----------------------------------
-    # بناء نقاط BUY / SELL
-    # -----------------------------------
-    buy_points = 0.0
-    sell_points = 0.0
-    notes: List[str] = []
-
-    # (A) Price Velocity
-    if change_15m > 0.7:
-        buy_points += 10.0
-        notes.append(f"Price +{change_15m:.2f}% على 15m → ضغط شراء.")
-    elif change_15m < -0.7:
-        sell_points += 10.0
-        notes.append(f"Price {change_15m:.2f}% على 15m → ضغط بيع.")
-
-    # 1h للتأكيد
-    if change_1h > 1.5:
-        buy_points += 5.0
-        notes.append(f"Price +{change_1h:.2f}% على 1h يدعم الشراء.")
-    elif change_1h < -1.5:
-        sell_points += 5.0
-        notes.append(f"Price {change_1h:.2f}% على 1h يدعم البيع.")
-
-    # (B) Volume Surge
-    if vol_surge_15m or vol_surge_1h:
-        if change_15m > 0:
-            buy_points += 8.0
-            notes.append("Volume Surge على 15m مع ارتفاع السعر → Flow شراء.")
-        elif change_15m < 0:
-            sell_points += 8.0
-            notes.append("Volume Surge على 15m مع هبوط السعر → Flow بيع.")
-        else:
-            buy_points += 2.0
-            sell_points += 2.0
-            notes.append("Volume Surge بدون اتجاه سعري واضح.")
-
-    # (C) Open Interest Dynamics
-    if oi_bias == "LEVERAGE_UP" and abs(oi_chg) > 0.5:
-        if change_15m > 0:
-            buy_points += 10.0
-            notes.append("OI ↑ مع السعر ↑ → دخول لونغات جديدة (Bullish Flow).")
-        elif change_15m < 0:
-            sell_points += 10.0
-            notes.append("OI ↑ مع السعر ↓ → دخول شورتات جديدة (Bearish Flow).")
-    elif oi_bias == "LEVERAGE_DOWN" and abs(oi_chg) > 0.5:
-        if change_15m > 0 or change_15m < 0:
-            buy_points += 2.0
-            sell_points += 2.0
-            notes.append("OI ↓ مع حركة السعر → خروج مراكز (Weak Flow).")
-
-    # (D) Funding Shift
-    if funding_severity in ("HIGH", "EXTREME") and isinstance(funding_rate, (int, float)):
-        if funding_rate > 0:
-            sell_points += 5.0
-            notes.append("Funding موجب عالي → السوق مزدحم لونغ.")
-        elif funding_rate < 0:
-            buy_points += 5.0
-            notes.append("Funding سالب عالي → السوق مزدحم شورت.")
-
-    # (E) Liquidations
-    if liq_intensity > 0.2 and liq_bias != "NONE":
-        if "SHORT" in liq_bias:
-            buy_points += 6.0 * liq_intensity
-            notes.append(f"Liquidations SHORT_WASHOUT (intensity={liq_intensity:.2f}) → دعم للشراء.")
-        elif "LONG" in liq_bias:
-            sell_points += 6.0 * liq_intensity
-            notes.append(f"Liquidations LONG_WASHOUT (intensity={liq_intensity:.2f}) → دعم للبيع.")
-
-    # (F) Binance Sentiment (اختياري)
-    if sentiment_bias and sentiment_strength > 5:
-        strength_norm = min(sentiment_strength / 50.0, 1.0)
-        if sentiment_bias == "LONG":
-            buy_points += 4.0 * strength_norm
-            notes.append(f"Binance Sentiment يميل للـ LONG (strength={sentiment_strength:.1f}).")
-        elif sentiment_bias == "SHORT":
-            sell_points += 4.0 * strength_norm
-            notes.append(f"Binance Sentiment يميل للـ SHORT (strength={sentiment_strength:.1f}).")
-
-    # -----------------------------------
-    # حساب السكور والباياس
-    # -----------------------------------
-    net_flow = buy_points - sell_points
-    flow_score = 50.0 + net_flow
-    flow_score = max(0.0, min(100.0, flow_score))
-
-    if flow_score >= 55 and net_flow > 3:
-        flow_bias = "BUY"
-    elif flow_score >= 55 and net_flow < -3:
-        flow_bias = "SELL"
-    else:
-        flow_bias = "NEUTRAL"
-
-    # -----------------------------------
-    # تحديد حالة التدفق (Flow State)
-    # -----------------------------------
-    exhaustion = False
-    if (
-        abs(change_1h) >= 3.0
-        or pump_dump_15m == "HIGH"
-        or pump_dump_1h == "HIGH"
-        or funding_severity == "EXTREME"
-    ):
-        exhaustion = True
-
-    if exhaustion:
-        flow_state = "EXHAUSTION"
-    else:
-        if (
-            abs(change_15m) < 0.3
-            and not vol_surge_15m
-            and abs(oi_chg) < 0.3
-            and liq_intensity < 0.1
-        ):
-            flow_state = "CALM"
-        else:
-            if (
-                abs(change_15m) >= 1.0
-                and (vol_surge_15m or vol_surge_1h)
-                and abs(oi_chg) >= 0.8
-            ):
-                flow_state = "EXPLOSION"
-            else:
-                flow_state = "BUILD_UP"
-
-    return {
-        "flow_score": round(float(flow_score), 2),
-        "flow_bias": flow_bias,
-        "flow_state": flow_state,
-        "buy_points": round(buy_points, 2),
-        "sell_points": round(sell_points, 2),
-        "change_15m": change_15m,
-        "change_1h": change_1h,
-        "oi_change_24h": oi_chg,
-        "oi_bias": oi_bias,
-        "funding_severity": funding_severity,
-        "funding_rate": funding_rate,
-        "liq_bias": liq_bias,
-        "liq_intensity": liq_intensity,
-        "sentiment_bias": sentiment_bias,
-        "sentiment_strength": sentiment_strength,
-        "notes": notes,
-    }
 
 # =========================
 # نقطة الدخول الرئيسية
@@ -1956,7 +1544,6 @@ def generate_signal(
     mode: str = "balanced",
     use_coinglass: bool = True,
 ) -> Dict[str, Any]:
-
     """
     Main Ultra Engine entrypoint.
 
@@ -1972,28 +1559,23 @@ def generate_signal(
     symbol_norm = _normalize_symbol(symbol)
     tf_results: Dict[str, Dict[str, Any]] = {}
 
-    # نحتفظ بآخر سعر واضح (نفضّل 1h ثم 15m)
     last_close: Optional[float] = None
 
-    # 1) Arkham Intel (placeholder)
     try:
         arkham_intel = get_arkham_intel(symbol_norm)
     except Exception:
         arkham_intel = None
 
-    # 1.25) Orderbook Intel
     try:
         orderbook_intel = analyse_orderbook(symbol_norm, limit=100)
     except Exception:
         orderbook_intel = None
 
-    # 1.3) Binance Sentiment (بديل مجاني)
     try:
         binance_sentiment = fetch_binance_sentiment(symbol_norm)
     except Exception:
         binance_sentiment = None
-        
-    # 1.4) Global Intel – حالة السوق العام (BTC + Fear & Greed)
+
     try:
         global_intel = get_global_intel()
     except Exception as e:
@@ -2006,7 +1588,6 @@ def generate_signal(
             "global_mood_score": 50.0,
         }
 
-    # 1.5) On-Chain Intel – شبكة BTC + Gas + Solana
     try:
         etherscan_key = os.getenv("ETHERSCAN_API_KEY")
         onchain_intel = get_onchain_intel(symbol_norm, etherscan_key)
@@ -2014,9 +1595,6 @@ def generate_signal(
         print("On-chain Intel error:", e)
         onchain_intel = {"available": False, "dump_risk": "MEDIUM"}
 
-
-
-    # 1.5) Coinglass Intel (من coinglass_client.py)
     coinglass = None
     if use_coinglass:
         try:
@@ -2026,15 +1604,12 @@ def generate_signal(
             print("Coinglass error:", e)
             coinglass = None
 
-
-    # 2) نجيب بيانات كل الفريمات
     for name, interval in TIMEFRAMES.items():
         try:
             ohlcv = fetch_klines(symbol_norm, interval)
             tf_info = analyse_timeframe(ohlcv, name)
             tf_results[name] = tf_info
 
-            # نخزن آخر سعر للفريمات المهمة
             if name == "1h":
                 last_close = tf_info.get("close", last_close)
             elif name == "15m" and last_close is None:
@@ -2050,7 +1625,6 @@ def generate_signal(
                 "pump_dump_risk": "LOW",
             }
 
-    # 3) ندمج الفريمات في قرار واحد
     combined = combine_timeframes(
         tf_results,
         arkham_intel=arkham_intel,
@@ -2059,23 +1633,34 @@ def generate_signal(
         mode=mode,
     )
 
-    # Global / On-Chain Intel في الـ combined عشان نستخدمه في الأسباب / ULTRA
     combined["global_intel"] = global_intel
     combined["onchain_intel"] = onchain_intel
 
+    # =========================
+    # ✅ Flow Engine External (مرة واحدة فقط)
+    # =========================
+    try:
+        flow_engine = compute_flow_engine(
+            symbol_norm,
+            combined,
+            coinglass or {"available": False},
+            onchain_intel or {"available": False},
+        )
+    except Exception as e:
+        print("Flow Engine error:", e)
+        flow_engine = {"available": False}
 
-    # 3.25) تأثير Coinglass (OI + Funding + Liquidations) على Long/Short
+    combined["flow_engine"] = flow_engine
+
+    # =========================
+    # 3.25) تأثير Coinglass (اختياري)
+    # =========================
     if coinglass and coinglass.get("available"):
         try:
             def _adj(key: str, delta: float):
                 if key in combined and abs(delta) > 0:
-                    combined[key] = max(
-                        0.0, min(100.0, combined.get(key, 50.0) + delta)
-                    )
+                    combined[key] = max(0.0, min(100.0, combined.get(key, 50.0) + delta))
 
-
-
-            # (A) Open Interest Bias – نفس منطقك الحالي
             oi = (coinglass or {}).get("open_interest") or {}
             oi_bias = oi.get("oi_bias", "NEUTRAL")
             oi_chg = oi.get("oi_change_24h")
@@ -2084,19 +1669,15 @@ def generate_signal(
             delta_short = 0.0
 
             if oi_bias == "LEVERAGE_UP" and oi_chg is not None and oi_chg > 0:
-                # رافعة لأعلى → تدعم اللونغ وتضعف الشورت
                 delta_long += 2.0
                 delta_short -= 2.0
             elif oi_bias == "LEVERAGE_DOWN" and oi_chg is not None and oi_chg < 0:
-                # رافعة لأسفل → تدعم الشورت وتضعف اللونغ (نقوّي أثرها أكثر)
                 delta_short += 4.0
                 delta_long -= 2.0
 
-            # تعديل Long/Short منفصل
             _adj("long_score", delta_long)
             _adj("short_score", delta_short)
 
-            # score العام يميل مع الجهة الغالبة/القرار الحالي
             act = combined.get("action")
             if act == "BUY":
                 overall_delta = delta_long
@@ -2106,41 +1687,33 @@ def generate_signal(
                 overall_delta = (delta_long + delta_short) / 2.0
             _adj("score", overall_delta)
 
-            # (B) Funding Rate Filter – Anti-Squeeze
             funding = (coinglass or {}).get("funding") or {}
             f_rate = funding.get("rate")
-            f_severity = funding.get("severity")  # LOW / MEDIUM / HIGH / EXTREME
+            f_severity = funding.get("severity")
 
             if f_rate is not None and f_severity:
                 if f_severity == "EXTREME" and mode != "momentum":
-                    # تمويل متطرف → نتفادى الصفقة بالكامل في safe/balanced
                     combined["no_trade"] = True
                 elif f_severity in ("HIGH", "MEDIUM"):
-                    # لو تمويل موجب عالي → لونغات مزدحمة → نضعف BUY
                     if f_rate > 0:
                         _adj("long_score", -3.0)
                         if combined.get("action") == "BUY":
                             _adj("score", -2.0)
-                    # لو تمويل سالب عالي → شورتات مزدحمة → نضعف SELL
                     elif f_rate < 0:
                         _adj("short_score", -3.0)
                         if combined.get("action") == "SELL":
                             _adj("score", -2.0)
 
-            # (C) Liquidation Intel – Washout Awareness
             liq = (coinglass or {}).get("liquidation") or {}
-            liq_bias = liq.get("bias")          # LONG_WASHOUT / SHORT_WASHOUT / ...
+            liq_bias = liq.get("bias")
             liq_intensity = float(liq.get("intensity") or 0.0)
             liq_intensity = max(0.0, min(1.0, liq_intensity))
 
             if liq_bias and liq_intensity > 0:
-                # لو كان فيه Long Washout قوي → نتجنب بيع متأخر (نضعف SELL)
                 if liq_bias == "LONG_WASHOUT":
                     _adj("short_score", -4.0 * liq_intensity)
                     if combined.get("action") == "SELL":
                         _adj("score", -3.0 * liq_intensity)
-
-                # لو Short Washout قوي → نتجنب شراء متأخر (نضعف BUY)
                 elif liq_bias == "SHORT_WASHOUT":
                     _adj("long_score", -4.0 * liq_intensity)
                     if combined.get("action") == "BUY":
@@ -2149,7 +1722,9 @@ def generate_signal(
         except Exception as e:
             print("Coinglass impact error:", e)
 
-    # 3.4) ULTRA Hacker Filter – Global + On-Chain + Coinglass
+    # =========================
+    # 3.4) ULTRA Hacker Filter
+    # =========================
     try:
         ultra_ok = _is_ultra_hacker_signal(
             combined,
@@ -2158,7 +1733,6 @@ def generate_signal(
             coinglass if use_coinglass else None,
             onchain_intel,
         )
-
     except Exception as e:
         ultra_ok = False
         print("ULTRA filter error:", e)
@@ -2167,45 +1741,31 @@ def generate_signal(
     if ultra_ok:
         combined["grade"] = "ULTRA"
 
-
-    # 3.5) ذكاء الأداء: تعديل القرار بناءً على تاريخ الصفقات في اللوق
+    # =========================
+    # 3.5) Performance Intel
+    # =========================
     try:
         perf = performance_intel(symbol_norm, combined)
     except Exception:
-        perf = {
-            "score_delta": 0.0,
-            "risk_multiplier": 1.0,
-            "force_no_trade": False,
-            "note": None,
-        }
+        perf = {"score_delta": 0.0, "risk_multiplier": 1.0, "force_no_trade": False, "note": None}
 
-    # نعدل السكور حسب أداء الزوج في الماضي
-    combined["score"] = max(
-        0.0, min(100.0, combined.get("score", 50.0) + perf["score_delta"])
-    )
+    combined["score"] = max(0.0, min(100.0, combined.get("score", 50.0) + perf["score_delta"]))
 
-    # لو الفلتر يقول هذي المنطقة خطرة → نحولها No-Trade
     if perf.get("force_no_trade"):
         combined["no_trade"] = True
         combined["action"] = "WAIT"
 
-    # نثبت الـ mode داخل decision
     combined["mode"] = mode
 
     # ===========================
-    # 🛡 B7A SHIELD – وضع الاختبار
-    # (تحذير فقط – لا يغير BUY/SELL)
+    # 🛡 B7A SHIELD (تحذير فقط)
     # ===========================
-    onchain_intel = combined.get("onchain_intel")
     combined = _apply_shield(
-       combined,
-       global_intel,
-       coinglass if use_coinglass else None,
-       onchain_intel,
+        combined,
+        global_intel,
+        coinglass if use_coinglass else None,
+        onchain_intel,
     )
-
-    
-    
 
     tp: Optional[float] = None
     sl: Optional[float] = None
@@ -2224,7 +1784,6 @@ def generate_signal(
     if last_close is not None:
         price = float(last_close)
 
-        # نسب المخاطرة حسب الثقة (الأساسية)
         if combined["confidence"] == "HIGH":
             risk_pct = 2.0
         elif combined["confidence"] == "MEDIUM":
@@ -2232,17 +1791,14 @@ def generate_signal(
         else:
             risk_pct = 1.0
 
-        # تعديل الرسك حسب الـ mode
         if mode == "safe":
             risk_pct *= 0.7
         elif mode == "momentum":
             risk_pct *= 1.2
 
-        # حجم الصفقة الذكي حسب أداء الزوج
         risk_pct *= perf.get("risk_multiplier", 1.0)
         risk_pct = max(0.5, min(3.0, risk_pct))
 
-        # مضاعف هدف الربح حسب السكور
         if combined["score"] >= 75:
             reward_mult = 2.5
         elif combined["score"] >= 65:
@@ -2250,7 +1806,6 @@ def generate_signal(
         else:
             reward_mult = 1.5
 
-        # تعديل الأهداف حسب المود
         if mode == "safe":
             reward_mult *= 0.9
         elif mode == "momentum":
@@ -2258,13 +1813,12 @@ def generate_signal(
 
         reward_pct = risk_pct * reward_mult
 
-        # حساب المستويات الديناميكية
         levels = compute_trade_levels_multi(
             decision=combined,
             symbol_norm=symbol_norm,
             price=price,
             risk_pct=risk_pct,
-            mode=mode,  
+            mode=mode,
         )
 
         sl = levels["sl"]
@@ -2275,13 +1829,13 @@ def generate_signal(
         rr2 = levels["rr2"]
         rr3 = levels["rr3"]
 
-        # التوافق مع البوت الحالي: نستخدم TP2 كهدف رئيسي
         tp = tp2
         rr = rr2
 
-    # 4) نص توضيحي ذكي مختصر
+    # =========================
+    # Reason Builder
+    # =========================
     reason_lines: List[str] = []
-
     reason_lines.append(f"وضع الإشارة الحالي (Mode): {mode.upper()}")
 
     grade = combined.get("grade")
@@ -2295,149 +1849,36 @@ def generate_signal(
         reason_lines.append("⚠️ هذه المنطقة مصنّفة حالياً كـ No-Trade Zone حسب فلتر B7A Ultra.")
 
     reason_lines.append(f"الاتجاه العام: {combined['trend']}")
-    reason_lines.append(
-        "أقوى الفريمات: "
-        + ", ".join(
-            tf for tf, d in tf_results.items()
-            if d.get("trend_score", 50) >= combined["score"]
-        )
-    )
 
     liq_bias = combined.get("liquidity_bias")
     liq_score = combined.get("liquidity_score", 0.0)
     if liq_bias == "UP":
-        reason_lines.append(
-            f"السيولة المتراكمة أقوى أعلى السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من فوق."
-        )
+        reason_lines.append(f"السيولة أقوى أعلى السعر (Liquidity Score ≈ {liq_score:.0f}) → احتمال سحب للأعلى.")
     elif liq_bias == "DOWN":
-        reason_lines.append(
-            f"السيولة المتراكمة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → السوق يميل يجمع السيولة من تحت."
-        )
+        reason_lines.append(f"السيولة أقوى أسفل السعر (Liquidity Score ≈ {liq_score:.0f}) → احتمال سحب للأسفل.")
 
-    if combined["pump_dump_risk"] != "LOW":
-        reason_lines.append(
-            f"تنبيه: احتمالية حركة حادة (Pump/Dump) = {combined['pump_dump_risk']} – انتبه مع الدخول."
-        )
+    if combined.get("pump_dump_risk") != "LOW":
+        reason_lines.append(f"تنبيه: Pump/Dump Risk = {combined['pump_dump_risk']}.")
 
-    # 📘 Orderbook Intel Summary
     ob_bias = combined.get("orderbook_bias", "FLAT")
     ob_score = combined.get("orderbook_score", 0.0)
     if ob_score and ob_score > 0:
         if ob_bias == "BID":
-            reason_lines.append(
-                f"ضغط المشترين في دفتر الأوامر (Orderbook BID) ملحوظ (Score ≈ {ob_score:.0f}) → الطلبات متقدّمة حالياً."
-            )
+            reason_lines.append(f"Orderbook: BID Pressure (Score ≈ {ob_score:.0f}).")
         elif ob_bias == "ASK":
-            reason_lines.append(
-                f"ضغط البائعين في دفتر الأوامر (Orderbook ASK) ملحوظ (Score ≈ {ob_score:.0f}) → العروض متقدّمة حالياً."
-            )
+            reason_lines.append(f"Orderbook: ASK Pressure (Score ≈ {ob_score:.0f}).")
 
-    # 📊 Binance Sentiment Summary
     bs_bias = combined.get("binance_sentiment_bias", "NEUTRAL")
     bs_strength = combined.get("binance_sentiment_strength", 0.0)
     if bs_bias != "NEUTRAL" and bs_strength:
-        if bs_bias == "LONG":
-            reason_lines.append(
-                f"Binance Sentiment → حسابات الفيوتشر تميل للـ LONG بقوة تقريبية {bs_strength:.1f} نقطة."
-            )
-        else:
-            reason_lines.append(
-                f"Binance Sentiment → حسابات الفيوتشر تميل للـ SHORT بقوة تقريبية {bs_strength:.1f} نقطة."
-            )
+        reason_lines.append(f"Binance Sentiment: {bs_bias} (strength≈{bs_strength:.1f}).")
 
-        # بعد حساب tf_results + coinglass + binance_sentiment + global_intel ...
-    # مباشرة بعد combine_timeframes وقبل بناء الـ result النهائي:
-
-    # ...
-    combined = combine_timeframes(
-        tf_results,
-        arkham_intel=arkham_intel,
-        orderbook_intel=orderbook_intel,
-        binance_sentiment=binance_sentiment,
-        mode=mode,
-    )
-
-    combined["global_intel"] = global_intel
-    combined["onchain_intel"] = onchain_intel
-
-    # 3.x) Flow Engine – B7A Flow Intel
-    try:
-        flow_intel = build_flow_intel(
-            tf_results,
-            coinglass if use_coinglass else None,
-            binance_sentiment,
-            last_close,
+    # ✅ Flow Engine Summary (خارجي)
+    fe = combined.get("flow_engine") or {}
+    if fe and fe.get("available"):
+        reason_lines.append(
+            f"Flow Engine: Bias={fe.get('bias')} | Score={fe.get('flow_score')} | Regime={fe.get('regime')}"
         )
-    except Exception as e:
-        print("Flow Engine error:", e)
-        flow_intel = {
-            "flow_score": 50.0,
-            "flow_bias": "NEUTRAL",
-            "flow_state": "CALM",
-            "notes": [],
-        }
-
-    # نخزن الـ Flow داخل decision + النتيجة النهائية
-    combined["flow"] = flow_intel
-
-    # 📊 Coinglass Intel (لو متوفر)
-    if coinglass:
-        try:
-            oi = (coinglass or {}).get("open_interest") or {}
-            fut = (coinglass or {}).get("futures_status") or {}
-            spot_i = (coinglass or {}).get("spot_status") or {}
-            etf = (coinglass or {}).get("btc_etf") or {}
-
-            oi_parts = []
-            if oi.get("available"):
-                oi_usd = oi.get("oi_usd")
-                oi_chg = oi.get("oi_change_24h")
-                oi_bias = oi.get("oi_bias", "NEUTRAL")
-
-                if oi_usd is not None:
-                    try:
-                        oi_parts.append(f"OI ≈ {oi_usd:,.0f} USD")
-                    except Exception:
-                        oi_parts.append(f"OI ≈ {oi_usd} USD")
-
-                if oi_chg is not None:
-                    oi_parts.append(f"24h ΔOI ≈ {oi_chg:.1f}%")
-
-                if oi_bias and oi_bias != "NEUTRAL":
-                    if oi_bias == "LEVERAGE_UP":
-                        oi_parts.append("Leverage Bias: UP (مراكز جديدة تفتح)")
-                    elif oi_bias == "LEVERAGE_DOWN":
-                        oi_parts.append("Leverage Bias: DOWN (مراكز تتقفل)")
-                    else:
-                        oi_parts.append(f"Leverage Bias: {oi_bias}")
-
-            status_parts = []
-            if fut.get("available") and fut.get("listed") is not None:
-                status_parts.append("Futures: LISTED" if fut["listed"] else "Futures: NOT LISTED")
-            if spot_i.get("available") and spot_i.get("listed") is not None:
-                status_parts.append("Spot: LISTED" if spot_i["listed"] else "Spot: NOT LISTED")
-
-            etf_parts = []
-            if etf.get("available") and etf.get("funds", 0) > 0:
-                funds = etf.get("funds", 0)
-                trading = etf.get("trading_count", 0)
-                halted = etf.get("halted_count", 0)
-                etf_parts.append(
-                    f"BTC ETFs: {trading}/{funds} trading, {halted} halted → يعكس شهية المؤسسات على بيتكوين."
-                )
-
-            all_parts = []
-            if oi_parts:
-                all_parts.append("Open Interest: " + " | ".join(oi_parts))
-            if status_parts:
-                all_parts.append("Listings: " + " | ".join(status_parts))
-            if etf_parts:
-                all_parts.extend(etf_parts)
-
-            if all_parts:
-                reason_lines.append("📊 Coinglass Intel → " + " || ".join(all_parts))
-        except Exception:
-            pass
 
     if perf.get("note"):
         reason_lines.append(perf["note"])
@@ -2455,7 +1896,6 @@ def generate_signal(
         "rr": rr,
         "risk_pct": risk_pct,
         "reward_pct": reward_pct,
-        # Multi-TP extra info
         "tp1": tp1,
         "tp2": tp2,
         "tp3": tp3,
@@ -2471,11 +1911,11 @@ def generate_signal(
         "onchain_intel": combined.get("onchain_intel"),
         "global_intel": combined.get("global_intel"),
         "is_ultra": combined.get("is_ultra", False),
-        "flow": flow_intel, 
-
+        # ✅ flow موحد
+        "flow_engine": combined.get("flow_engine"),
+        "flow": combined.get("flow_engine"),
     }
 
-    # تسجيل الصفقات الفعلية فقط
     if (
         combined.get("action") in ("BUY", "SELL")
         and combined.get("no_trade") is False

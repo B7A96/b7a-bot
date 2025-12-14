@@ -1652,6 +1652,16 @@ def generate_signal(
 
     combined["flow_engine"] = flow_engine
 
+    # ✅✅✅ هنا تحط Gate فلتر Flow Engine
+    fe = combined.get("flow_engine") or {}
+    if fe.get("available"):
+        if fe.get("regime") == "EXHAUSTION" and mode != "momentum":
+            combined["no_trade"] = True
+            combined["action"] = "WAIT"
+            # (اختياري) سبب واضح داخل الريزن
+            combined["flow_gate_reason"] = "Flow Engine رجّح Exhaustion → No-Trade (غير مومنتوم)"
+
+
     # =========================
     # 3.25) تأثير Coinglass (اختياري)
     # =========================

@@ -1107,31 +1107,6 @@ def combine_timeframes(
         gray_low = 50.0
         gray_high = 70.0
 
-    # =========================
-    # ✅ Side thresholds (align mins) + Neutral Zone Lock
-    # =========================
-    if mode == "safe":
-        bull_align_min = 0.55
-        bear_align_min = 0.55
-        gray_strength_min = 75.0
-    elif mode == "momentum":
-        bull_align_min = 0.35
-        bear_align_min = 0.35
-        gray_strength_min = 62.0
-    else:  # balanced
-        bull_align_min = 0.45
-        bear_align_min = 0.45
-        gray_strength_min = 68.0
-
-    # Neutral Zone (45-55): غالباً Chop/Noise → WAIT إلا لو القوة الجانبية عالية جداً
-    neutral_zone = 45.0 <= combined_score <= 55.0
-    neutral_lock = False
-    if neutral_zone and mode != "momentum":
-        dist_tmp = abs(combined_score - 50.0)
-        conf_tmp = "HIGH" if dist_tmp >= 22 else ("MEDIUM" if dist_tmp >= 12 else "LOW")
-        if conf_tmp == "LOW" or max(long_score, short_score) < 72.0:
-            neutral_lock = True
-
     sell_oversold_block = oversold and global_trend != "BULLISH"
     buy_overbought_block = overbought and global_trend != "BULLISH"
 
@@ -1140,8 +1115,7 @@ def combine_timeframes(
     if (
         long_score >= long_min
         and long_score >= short_score
-        and bull_align >= bull_align_min
-        and not neutral_lock
+        and bull_align >= 0.40
         and not buy_overbought_block
         and max_pump_risk != "HIGH"
         and (strong_bull_anchor or (global_regime in ("TRENDING", "RANGING") and liquidity_bias in ("UP", "FLAT")))
@@ -1151,8 +1125,7 @@ def combine_timeframes(
     if (
         short_score >= short_min
         and short_score > long_score
-        and bear_align >= bear_align_min
-        and not neutral_lock
+        and bear_align >= 0.30
         and not sell_oversold_block
         and (strong_bear_anchor or (global_trend == "BEARISH" and liquidity_bias in ("DOWN", "FLAT")))
     ):
@@ -1161,16 +1134,14 @@ def combine_timeframes(
     if action == "WAIT" and gray_low <= combined_score < gray_high and max_pump_risk != "HIGH":
         if (
             liquidity_bias == "UP"
-            and bull_align >= bull_align_min
-            and max(long_score, short_score) >= gray_strength_min
+            and bull_align >= 0.45
             and not buy_overbought_block
             and (strong_bull_anchor or breakout_up_weight > 0.20)
         ):
             action = "BUY"
         elif (
             liquidity_bias == "DOWN"
-            and bear_align >= bear_align_min
-            and max(long_score, short_score) >= gray_strength_min
+            and bear_align >= 0.40
             and not sell_oversold_block
             and (strong_bear_anchor or breakout_down_weight > 0.20)
         ):
@@ -1188,11 +1159,6 @@ def combine_timeframes(
         ):
             action = "BUY"
             pump_momentum = True
-
-    
-    # ✅ Neutral lock override
-    if neutral_lock and action in ("BUY", "SELL"):
-        action = "WAIT"
 
     distance = abs(combined_score - 50.0)
     if distance >= 22:
@@ -1684,12 +1650,6 @@ def generate_signal(
         print("Flow Engine error:", e)
         flow_engine = {"available": False}
 
-    # Compatibility keys for UI/handlers
-    if isinstance(flow_engine, dict):
-        flow_engine.setdefault("flow_bias", flow_engine.get("bias"))
-        flow_engine.setdefault("flow_score", flow_engine.get("score"))
-        flow_engine.setdefault("flow_state", flow_engine.get("regime") or flow_engine.get("state"))
-
     combined["flow_engine"] = flow_engine
 
     # ✅✅✅ هنا تحط Gate فلتر Flow Engine
@@ -1804,27 +1764,6 @@ def generate_signal(
     if perf.get("force_no_trade"):
         combined["no_trade"] = True
         combined["action"] = "WAIT"
-
-
-    # ===========================
-    # ✅ Display Score Fix (حل مشكلة: SELL مع Score قريب من 50)
-    # - core_score: السكور الكلاسيكي (0-100) حول 50 = حيادي
-    # - score: سكورنـا المعروض للمستخدم = Side Score (LongScore للشراء / ShortScore للبيع)
-    # ===========================
-    try:
-        combined["core_score"] = float(combined.get("score", 50.0))
-        ls = float(combined.get("long_score", 0.0) or 0.0)
-        ss = float(combined.get("short_score", 0.0) or 0.0)
-        act = (combined.get("action") or "WAIT").upper()
-        if act == "BUY":
-            combined["score"] = round(ls, 2)
-        elif act == "SELL":
-            combined["score"] = round(ss, 2)
-        else:
-            combined["score"] = round(max(ls, ss, combined["core_score"]), 2)
-        combined["strength_score"] = round(max(ls, ss), 2)
-    except Exception:
-        combined["core_score"] = combined.get("score", 50.0)
 
     combined["mode"] = mode
 

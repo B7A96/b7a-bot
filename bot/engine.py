@@ -1936,4 +1936,21 @@ def generate_signal(
         except Exception as e:
             print("log_trade error:", e)
 
+    debug = {
+  "core_score": decision.get("score"),
+  "long_score": decision.get("long_score"),
+  "short_score": decision.get("short_score"),
+  "bull_align": decision.get("bull_align"),
+  "bear_align": decision.get("bear_align"),
+  "liq_bias": decision.get("liquidity_bias"),
+  "liq_score": decision.get("liquidity_score"),
+  "ob_bias": decision.get("orderbook_bias"),
+  "ob_score": decision.get("orderbook_score"),
+  "sent_bias": decision.get("binance_sentiment_bias"),
+  "sent_strength": decision.get("binance_sentiment_strength"),
+  "shield": decision.get("shield_suggest_no_trade"),
+}
+result["debug"] = debug
+
+
     return result

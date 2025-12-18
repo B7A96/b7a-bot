@@ -2,9 +2,7 @@ import time
 from typing import Dict, Any, List, Optional
 from html import escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ContextTypes,
-)
+from telegram.ext import ContextTypes
 
 from bot.engine import generate_signal
 from bot.market import (
@@ -54,7 +52,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <b>/scan</b> لفحص عملات السوق\n\n"
         "📘 لا تعرف الأوامر؟ استخدم <b>/help</b>\n"
     )
-
     await update.message.reply_text(text, parse_mode="HTML")
 
 
@@ -107,49 +104,24 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =================================================
-# Helper: Safe Rank / Display Score
-# =================================================
-def _safe_float(x: Any, default: float = 50.0) -> float:
-    try:
-        return float(x)
-    except Exception:
-        return default
-
-
-def _decision_edge_or_score(decision: Dict[str, Any]) -> float:
-    # يفضّل edge_score، ولو غير موجود يرجع score
-    return _safe_float(decision.get("edge_score", decision.get("score", 50.0)), 50.0)
-
-
-def _decision_tier(decision: Dict[str, Any]) -> str:
-    t = decision.get("tier")
-    return str(t) if t is not None else ""
-
-
-# =================================================
 # 5) 🔥 Build Basic (Short) Signal Message
 # =================================================
 def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     decision = signal_data.get("decision", {})
     last_price = signal_data.get("last_price")
-    mode = signal_data.get("mode", "balanced")
+    mode = signal_data.get("mode", decision.get("mode", "balanced"))
 
     action = decision.get("action", "WAIT")
-
-    # ✅ عرض Edge Score (fallback للـ score)
-    score_display = _decision_edge_or_score(decision)
-    tier = _decision_tier(decision)
-
+    score = float(decision.get("score", 50.0) or 50.0)
     trend = decision.get("trend", "RANGING")
     confidence = decision.get("confidence", "LOW")
     pump_risk = decision.get("pump_dump_risk", "LOW")
+    grade = decision.get("grade", "C")
 
     sl = signal_data.get("sl")
     tp1 = signal_data.get("tp1")
     tp2 = signal_data.get("tp2")
     tp3 = signal_data.get("tp3")
-
-    grade = decision.get("grade", "C")
 
     msg: List[str] = []
     msg.append(f"🏅 <b>B7A Ultra Signal – {symbol.upper()}</b>")
@@ -163,9 +135,7 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     msg.append("")
     msg.append("📬 <b>قرار النظام</b>")
     msg.append(f"• Action: <b>{action}</b>")
-    if tier:
-        msg.append(f"• Tier: <b>{escape(tier)}</b>")
-    msg.append(f"• Edge Score: <b>{score_display:.1f}/100</b>")
+    msg.append(f"• Score: <b>{score:.1f}/100</b>")
     msg.append(f"• Trend: <b>{trend}</b>")
     msg.append(f"• Confidence: <b>{confidence}</b>")
     msg.append(f"• Pump/Dump Risk: <b>{pump_risk}</b>")
@@ -188,13 +158,9 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
     # =========================
     # 🛡 B7A Shield – وضع الاختبار
     # =========================
-    shield_active = decision.get("shield_active")
-    shield_suggest_no_trade = decision.get("shield_suggest_no_trade")
-    shield_reasons = (
-        decision.get("shield_reasons")
-        or decision.get("no_trade_reasons")
-        or []
-    )
+    shield_active = bool(decision.get("shield_active"))
+    shield_suggest_no_trade = bool(decision.get("shield_suggest_no_trade"))
+    shield_reasons = decision.get("shield_reasons") or decision.get("no_trade_reasons") or []
 
     if shield_active:
         msg.append("")
@@ -203,19 +169,19 @@ def _build_signal_message(signal_data: Dict[str, Any], symbol: str) -> str:
             msg.append("• ⚠️ الشيلد يعتبر هذه الصفقة <b>عالية الخطورة</b> ولا ينصح بالدخول.")
         else:
             msg.append("• الشيلد فعّال لكنه <b>لم يمنع</b> هذه الصفقة.")
-        for r in shield_reasons:
+        for r in shield_reasons[:6]:
             msg.append(f"• {escape(str(r))}")
 
     # =========================
-    # 🔄 B7A Flow Engine
+    # 🔄 B7A Flow Engine (FIXED KEYS)
     # =========================
-    flow = signal_data.get("flow")
+    flow = decision.get("flow") or signal_data.get("flow")
     if flow:
         msg.append("")
         msg.append("🔄 <b>B7A Flow Engine</b>")
-        flow_regime = str(flow.get("regime", "UNKNOWN"))
-        flow_bias = str(flow.get("bias", "NEUTRAL"))
-        msg.append(f"• Regime: <b>{escape(flow_regime)}</b>")
+        flow_state = str(flow.get("flow_state", "UNKNOWN"))
+        flow_bias = str(flow.get("flow_bias", "NEUTRAL"))
+        msg.append(f"• Regime: <b>{escape(flow_state)}</b>")
         msg.append(f"• Bias: <b>{escape(flow_bias)}</b>")
 
     return "\n".join(msg)
@@ -229,22 +195,13 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
     tf_data = signal_data.get("timeframes", {})
     reason = signal_data.get("reason", "")
 
-    # ✅ Flow (من decision أو من signal_data كاحتياط)
     flow = decision.get("flow") or signal_data.get("flow") or {}
     flow_score = flow.get("flow_score")
-    flow_bias = flow.get("bias")
-    flow_state = flow.get("state")
+    flow_bias = flow.get("flow_bias")
+    flow_state = flow.get("flow_state")
 
     liquidity_bias = decision.get("liquidity_bias") or signal_data.get("liquidity_bias")
     liquidity_score = decision.get("liquidity_score") or signal_data.get("liquidity_score")
-
-    # ✅ Edge/Tier + Long/Short + Align (تشخيص سريع)
-    edge = decision.get("edge_score", decision.get("score"))
-    tier = decision.get("tier")
-    long_score = decision.get("long_score")
-    short_score = decision.get("short_score")
-    bull_align = decision.get("bull_align")
-    bear_align = decision.get("bear_align")
 
     coinglass = signal_data.get("coinglass") or {}
     funding = coinglass.get("funding") or {}
@@ -252,26 +209,15 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
 
     lines: List[str] = []
 
-    # ✅ Edge/Tier Debug Layer
-    lines.append("<b>⚡ Signal Control (Edge/Tier)</b>")
-    lines.append(
-        f"• Edge Score: <b>{_safe_float(edge, 50):.0f}</b> | Tier: <b>{escape(str(tier)) if tier else '-'}</b>"
-    )
-    if long_score is not None or short_score is not None:
-        lines.append(
-            f"• Long/Short: <b>{_safe_float(long_score, 50):.0f}</b> / <b>{_safe_float(short_score, 50):.0f}</b>"
-        )
-    if bull_align is not None or bear_align is not None:
-        lines.append(
-            f"• Align: bull=<b>{_safe_float(bull_align, 0):.2f}</b> | bear=<b>{_safe_float(bear_align, 0):.2f}</b>"
-        )
-    lines.append("")
-
     # 🌊 B7A Flow Engine
     if flow:
         lines.append("<b>🌊 B7A Flow Engine</b>")
+        try:
+            fs = float(flow_score) if flow_score is not None else 50.0
+        except Exception:
+            fs = 50.0
         lines.append(
-            f"• Flow Bias: <b>{escape(str(flow_bias))}</b> | Flow Score: <b>{_safe_float(flow_score, 50):.0f}</b> | State: <b>{escape(str(flow_state))}</b>"
+            f"• Flow Bias: <b>{escape(str(flow_bias))}</b> | Flow Score: <b>{fs:.0f}</b> | State: <b>{escape(str(flow_state))}</b>"
         )
         notes = flow.get("notes") or []
         if notes:
@@ -280,9 +226,11 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
 
     # 💧 السيولة
     lines.append("<b>💧 السيولة (Liquidity)</b>")
-    lines.append(
-        f"• Bias: <b>{escape(str(liquidity_bias))}</b> | Liquidity Score ≈ <b>{_safe_float(liquidity_score, 0):.0f}</b>"
-    )
+    try:
+        ls = float(liquidity_score) if liquidity_score is not None else 0.0
+    except Exception:
+        ls = 0.0
+    lines.append(f"• Bias: <b>{escape(str(liquidity_bias))}</b> | Liquidity Score ≈ <b>{ls:.0f}</b>")
 
     # 📊 Coinglass Intel
     if funding.get("available") or liquidation.get("available"):
@@ -294,11 +242,11 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
             severity = funding.get("severity")
             side = funding.get("side_bias")
             try:
-                rate_str = f"{float(rate):.4f}%"
+                rate_txt = f"{float(rate):.4f}%"
             except Exception:
-                rate_str = str(rate)
+                rate_txt = "N/A"
             lines.append(
-                f"• Funding: <b>{escape(rate_str)}</b> | Severity: <b>{escape(str(severity))}</b> | Side: <b>{escape(str(side))}</b>"
+                f"• Funding: <b>{rate_txt}</b> | Severity: <b>{escape(str(severity))}</b> | Side: <b>{escape(str(side))}</b>"
             )
 
         if liquidation.get("available"):
@@ -306,14 +254,18 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
             intensity = liquidation.get("intensity")
             total = liquidation.get("liquidation_usd")
             try:
-                total_str = f"{float(total):,.0f}"
+                it = float(intensity)
             except Exception:
-                total_str = str(total)
+                it = 0.0
+            try:
+                tt = float(total) if total is not None else 0.0
+            except Exception:
+                tt = 0.0
             lines.append(
-                f"• Liquidations: Bias <b>{escape(str(bias))}</b> | Intensity: <b>{_safe_float(intensity, 0):.2f}</b> | Total ≈ <b>{escape(total_str)}</b> USD"
+                f"• Liquidations: Bias <b>{escape(str(bias))}</b> | Intensity: <b>{it:.2f}</b> | Total ≈ <b>{tt:,.0f}</b> USD"
             )
 
-    # 🧠 ملخص الفريمات
+    # ملخص الفريمات
     lines.append("")
     lines.append("<b>🧠 ملخص الفريمات</b>")
     for tf in ["15m", "1h", "4h", "1d"]:
@@ -324,10 +276,10 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
         t_score = tf_info.get("score")
         regime = tf_info.get("regime")
         lines.append(
-            f"• {tf} | Trend: <b>{escape(str(t_trend))}</b> | Score: <b>{_safe_float(t_score, 50):.0f}</b> | Regime: <b>{escape(str(regime))}</b>"
+            f"• {tf} | Trend: <b>{escape(str(t_trend))}</b> | Score: <b>{escape(str(t_score))}</b> | Regime: <b>{escape(str(regime))}</b>"
         )
 
-    # 📝 لماذا أعطى البوت الإشارة؟
+    # لماذا أعطى البوت الإشارة؟
     if reason:
         lines.append("")
         lines.append("<b>📝 لماذا أعطى البوت هذه الإشارة؟</b>")
@@ -352,7 +304,8 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     signal_data = generate_signal(symbol_norm, mode=mode, use_coinglass=True)
     text = _build_signal_message(signal_data, symbol_norm)
 
-    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}USDT"
+    # FIX: لا تضيف USDT مرة ثانية
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}"
 
     keyboard = [
         [
@@ -360,9 +313,7 @@ async def signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh|{symbol_norm}"),
             InlineKeyboardButton("📊 فتح الشارت", url=tv_url),
         ],
-        [
-            InlineKeyboardButton("🧠 تحليل مفصل", callback_data=f"analysis|{symbol_norm}")
-        ],
+        [InlineKeyboardButton("🧠 تحليل مفصل", callback_data=f"analysis|{symbol_norm}")],
     ]
 
     await update.message.reply_text(
@@ -384,10 +335,9 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     symbol_norm = _normalize_symbol(symbol)
     signal_data = generate_signal(symbol_norm, mode=mode, use_coinglass=True)
-
     text = _build_signal_message(signal_data, symbol_norm)
 
-    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}USDT"
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}"
 
     keyboard = [
         [
@@ -395,16 +345,10 @@ async def refresh_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh|{symbol_norm}"),
             InlineKeyboardButton("📊 فتح الشارت", url=tv_url),
         ],
-        [
-            InlineKeyboardButton("🧠 تحليل مفصل", callback_data=f"analysis|{symbol_norm}")
-        ],
+        [InlineKeyboardButton("🧠 تحليل مفصل", callback_data=f"analysis|{symbol_norm}")],
     ]
 
-    await query.edit_message_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # =================================================
@@ -441,21 +385,16 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = scan_market(symbols, mode=mode)
 
-    # ✅ رتب حسب edge_score (fallback للـ score)
-    def _rank_key(item):
-        dec = (item.get("signal") or {}).get("decision") or {}
-        return _decision_edge_or_score(dec)
-
     buys = sorted(
         [x for x in data if x["signal"]["decision"]["action"] == "BUY"],
-        key=_rank_key,
+        key=lambda x: float(x["signal"]["decision"]["score"]),
         reverse=True,
     )[:5]
 
     sells = sorted(
         [x for x in data if x["signal"]["decision"]["action"] == "SELL"],
-        key=_rank_key,
-        reverse=True,
+        key=lambda x: float(x["signal"]["decision"]["score"]),
+        reverse=False,
     )[:5]
 
     if buys:
@@ -463,26 +402,14 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for item in buys:
             sym = item["symbol"]
             sdata = item["signal"]["decision"]
-            edge = _decision_edge_or_score(sdata)
-            tier = _decision_tier(sdata)
-            grade = sdata.get("grade")
-            tier_part = f" | Tier: {tier}" if tier else ""
-            result.append(
-                f"• {sym}: BUY | Grade: {grade}{tier_part} | Edge: {edge:.0f}"
-            )
+            result.append(f"• {sym}: BUY | Grade: {sdata.get('grade')} | Score: {float(sdata.get('score') or 0):.0f}")
 
     if sells:
         result.append("\n🔴 أفضل فرص SELL:\n")
         for item in sells:
             sym = item["symbol"]
             sdata = item["signal"]["decision"]
-            edge = _decision_edge_or_score(sdata)
-            tier = _decision_tier(sdata)
-            grade = sdata.get("grade")
-            tier_part = f" | Tier: {tier}" if tier else ""
-            result.append(
-                f"• {sym}: SELL | Grade: {grade}{tier_part} | Edge: {edge:.0f}"
-            )
+            result.append(f"• {sym}: SELL | Grade: {sdata.get('grade')} | Score: {float(sdata.get('score') or 0):.0f}")
 
     if not buys and not sells:
         result.append("لا توجد فرص واضحة حالياً حسب شروط B7A Ultra.")
@@ -505,15 +432,11 @@ async def scan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = scan_market(symbols, mode=mode)
 
     msg: List[str] = ["🔍 فحص أعلى عملات USDT من حيث الفوليوم...\n"]
-
     for item in results[:10]:
         sym = item["symbol"]
         dec = item["signal"]["decision"]
-        edge = _decision_edge_or_score(dec)
-        tier = _decision_tier(dec)
-        tier_part = f" | Tier: {tier}" if tier else ""
         msg.append(
-            f"• {sym}: {dec.get('action')} | Grade: {dec.get('grade')}{tier_part} | Edge: {edge:.0f}"
+            f"• {sym}: {dec.get('action')} | Grade: {dec.get('grade')} | Score: {float(dec.get('score') or 0):.0f}"
         )
 
     if len(msg) == 1:
@@ -538,11 +461,8 @@ async def scan_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item in res:
         sym = item["symbol"]
         dec = item["signal"]["decision"]
-        edge = _decision_edge_or_score(dec)
-        tier = _decision_tier(dec)
-        tier_part = f" | Tier: {tier}" if tier else ""
         msg.append(
-            f"• {sym}: {dec.get('action')} | Grade: {dec.get('grade')}{tier_part} | Edge: {edge:.0f}"
+            f"• {sym}: {dec.get('action')} | Grade: {dec.get('grade')} | Score: {float(dec.get('score') or 0):.0f}"
         )
 
     await update.message.reply_text("\n".join(msg), parse_mode="HTML")
@@ -587,9 +507,7 @@ async def list_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ قائمة المراقبة فارغة.")
         return
 
-    await update.message.reply_text(
-        "👀 قائمة المراقبة الحالية:\n" + ", ".join(wl)
-    )
+    await update.message.reply_text("👀 قائمة المراقبة الحالية:\n" + ", ".join(wl))
 
 
 # =================================================
@@ -626,12 +544,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 16) Mode Toggle
 # =================================================
 async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    زر Mode داخل إشارة /signal:
-    - يغيّر المود (BALANCED / MOMENTUM / SAFE)
-    - يعيد بناء نفس رسالة الإشارة بالمود الجديد
-    - بدون إرسال رسالة جديدة منفصلة
-    """
     query = update.callback_query
     await query.answer()
 
@@ -640,7 +552,6 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     current = _get_current_mode(context)
     modes = ["balanced", "momentum", "safe"]
-
     idx = modes.index(current)
     new_mode = modes[(idx + 1) % len(modes)]
 
@@ -649,32 +560,17 @@ async def toggle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     signal_data = generate_signal(symbol_norm, mode=new_mode, use_coinglass=True)
     text = _build_signal_message(signal_data, symbol_norm)
 
-    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}USDT"
+    tv_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol_norm}"
     keyboard = [
         [
-            InlineKeyboardButton(
-                f"⚙️ Mode: {new_mode}",
-                callback_data=f"mode|{symbol_norm}",
-            ),
-            InlineKeyboardButton(
-                "🔄 Refresh",
-                callback_data=f"refresh|{symbol_norm}",
-            ),
+            InlineKeyboardButton(f"⚙️ Mode: {new_mode}", callback_data=f"mode|{symbol_norm}"),
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh|{symbol_norm}"),
             InlineKeyboardButton("📊 فتح الشارت", url=tv_url),
         ],
-        [
-            InlineKeyboardButton(
-                "🧠 تحليل مفصل",
-                callback_data=f"analysis|{symbol_norm}",
-            )
-        ],
+        [InlineKeyboardButton("🧠 تحليل مفصل", callback_data=f"analysis|{symbol_norm}")],
     ]
 
-    await query.edit_message_text(
-        text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # =================================================

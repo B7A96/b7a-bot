@@ -1842,89 +1842,92 @@ def generate_signal(
         tp = tp2
         rr = rr2
 
-# =========================
-# (8) Translation Layer: B7A Ultra X Bot Logic
-# =========================
 
-def _clamp(x, a=0.0, b=100.0):
-    try:
-        x = float(x)
-    except Exception:
-        x = 50.0
-    return max(a, min(b, x))
+    # =========================
+    # (8) Translation Layer: B7A Ultra X Bot Logic
+    # =========================
+    def _clamp(x, a=0.0, b=100.0):
+        try:
+            x = float(x)
+        except Exception:
+            x = 50.0
+        return max(a, min(b, x))
 
-action = (combined.get("action") or "WAIT").upper()
-mode = (combined.get("mode") or "balanced").lower()
+    action_local = (combined.get("action") or "WAIT").upper()
+    mode_local = (combined.get("mode") or mode or "balanced").lower()
 
-score = _clamp(combined.get("score", 50))
-long_score = _clamp(combined.get("long_score", score))
-short_score = _clamp(combined.get("short_score", 100 - score))
+    score_local = _clamp(combined.get("score", 50))
+    long_score_local = _clamp(combined.get("long_score", score_local))
+    short_score_local = _clamp(combined.get("short_score", 100 - score_local))
 
-bull_align = float(combined.get("bull_align") or 0.0)
-bear_align = float(combined.get("bear_align") or 0.0)
+    bull_align_local = float(combined.get("bull_align") or 0.0)
+    bear_align_local = float(combined.get("bear_align") or 0.0)
 
-liq_score = float(combined.get("liquidity_score") or 0.0)
-pump_risk = (combined.get("pump_dump_risk") or "LOW").upper()
-confidence = (combined.get("confidence") or "LOW").upper()
+    liq_score_local = float(combined.get("liquidity_score") or 0.0)
+    pump_risk_local = (combined.get("pump_dump_risk") or "LOW").upper()
+    confidence_local = (combined.get("confidence") or "LOW").upper()
 
-# Flow
-flow = combined.get("flow") or {}
-flow_score = _clamp(flow.get("flow_score", 50))
-flow_bias = (flow.get("bias") or "NEUTRAL").upper()
-flow_state = (flow.get("state") or "CALM").upper()
+    # Flow: أنت موحّد flow = flow_engine تحت، فخلّه من flow_engine
+    fe_local = combined.get("flow_engine") or {}
+    flow_score_local = _clamp(fe_local.get("flow_score", 50))
+    flow_bias_local = (fe_local.get("bias") or "NEUTRAL").upper()
+    flow_state_local = (fe_local.get("regime") or "CALM").upper()
 
-# Shield
-shield_suggest = bool(combined.get("shield_suggest_no_trade", False))
+    # Shield
+    shield_suggest_local = bool(combined.get("shield_suggest_no_trade", False))
 
-# --- Compute EDGE Score (قوة الإشارة الفعلية) ---
-# BUY: نركز على long_score
-# SELL: نركز على short_score
-edge = long_score if action == "BUY" else short_score if action == "SELL" else 50.0
+    # --- Compute EDGE Score ---
+    edge = long_score_local if action_local == "BUY" else short_score_local if action_local == "SELL" else 50.0
 
-# Align boost
-edge += 10.0 * bull_align if action == "BUY" else 10.0 * bear_align if action == "SELL" else 0.0
+    # Align boost
+    if action_local == "BUY":
+        edge += 10.0 * bull_align_local
+    elif action_local == "SELL":
+        edge += 10.0 * bear_align_local
 
-# Liquidity quality
-if liq_score >= 12:
-    edge += 3.0
-elif liq_score <= 4:
-    edge -= 4.0
+    # Liquidity quality
+    if liq_score_local >= 12:
+        edge += 3.0
+    elif liq_score_local <= 4:
+        edge -= 4.0
 
-# Flow confirmation
-if action == "BUY" and flow_bias == "BUY":
-    edge += 4.0
-if action == "SELL" and flow_bias == "SELL":
-    edge += 4.0
-if flow_state == "EXHAUSTION" and mode != "momentum":
-    edge -= 6.0
+    # Flow confirmation
+    if action_local == "BUY" and flow_bias_local in ("BUY", "BULL", "BULLISH"):
+        edge += 4.0
+    if action_local == "SELL" and flow_bias_local in ("SELL", "BEAR", "BEARISH"):
+        edge += 4.0
+    if flow_state_local == "EXHAUSTION" and mode_local != "momentum":
+        edge -= 6.0
 
-# Pump risk penalty
-if pump_risk == "MEDIUM":
-    edge -= 3.0
-elif pump_risk == "HIGH":
-    edge -= 8.0
+    # Pump risk penalty
+    if pump_risk_local == "MEDIUM":
+        edge -= 3.0
+    elif pump_risk_local == "HIGH":
+        edge -= 8.0
 
-# Shield penalty (تحذيري)
-if shield_suggest and mode != "momentum":
-    edge -= 6.0
+    # Shield penalty (تحذيري)
+    if shield_suggest_local and mode_local != "momentum":
+        edge -= 6.0
 
-edge = _clamp(edge)
+    edge = _clamp(edge)
 
-# --- Map EDGE to Signal Tier ---
-if edge >= 85 and confidence in ("HIGH", "MEDIUM") and pump_risk == "LOW":
-    tier = "S"
-elif edge >= 75:
-    tier = "A"
-elif edge >= 65:
-    tier = "B"
-elif edge >= 55:
-    tier = "C"
-else:
-    tier = "D"
+    # --- Map EDGE to Signal Tier ---
+    if edge >= 85 and confidence_local in ("HIGH", "MEDIUM") and pump_risk_local == "LOW":
+        tier = "S"
+    elif edge >= 75:
+        tier = "A"
+    elif edge >= 65:
+        tier = "B"
+    elif edge >= 55:
+        tier = "C"
+    else:
+        tier = "D"
 
-combined["edge_score"] = round(edge, 2)   # ✅ أهم رقم للرادار
-combined["tier"] = tier                  # ✅ تصنيف تشغيل
+    combined["edge_score"] = round(edge, 2)
+    combined["tier"] = tier
 
+
+    
     # =========================
     # Reason Builder
     # =========================

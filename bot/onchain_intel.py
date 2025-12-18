@@ -103,38 +103,37 @@ def _btc_onchain_snapshot() -> Dict[str, Any]:
     }
 
 
-# =========================
-# ETH Gas (Etherscan)
-# =========================
 def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
     """
     Snapshot بسيط لحالة الغاز على شبكة ETH من Etherscan Gas Oracle.
-    يحتاج ETHERSCAN_API_KEY.
+    Etherscan v2 يتطلب chainid.
     """
+    # ✅ v2 requires chainid (default Ethereum mainnet = 1)
+    try:
+        chainid = int(os.getenv("ETHERSCAN_CHAINID", "1"))
+    except Exception:
+        chainid = 1
+
     params = {
+        "chainid": chainid,           # ✅ هذا هو الإصلاح الأساسي
         "module": "gastracker",
         "action": "gasoracle",
         "apikey": etherscan_api_key,
     }
+
     data = _safe_get(ETHERSCAN_GAS_URL, params=params)
 
-    # Etherscan العادي يرجع:
-    # { "status": "1", "message": "OK", "result": { ... } }
-    # لكن في حالة الخطأ / الريت ليمت:
-    # { "status": "0", "message": "NOTOK", "result": "Max rate limit reached ..." }
     result = data.get("result")
 
     # لو result مو dict (يعني سترنق) نرمي خطأ بسيط ونخلي onchain_eth متوقف
     if not isinstance(result, dict):
         raise OnchainError(f"Etherscan gas oracle returned non-dict result: {result}")
 
-    # الحقول ترجع كنصوص
     safe_gwei = float(result.get("SafeGasPrice") or 0.0)
     propose_gwei = float(result.get("ProposeGasPrice") or 0.0)
     fast_gwei = float(result.get("FastGasPrice") or 0.0)
     base_fee = float(result.get("suggestBaseFee") or 0.0)
 
-    # متوسط استهلاك البلوك من gasUsedRatio (قائمة نصية مفصولة بفاصلة)
     ratios_raw = str(result.get("gasUsedRatio") or "")
     ratios = []
     for part in ratios_raw.split(","):
@@ -147,10 +146,9 @@ def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
             continue
 
     avg_ratio = sum(ratios) / len(ratios) if ratios else 0.5
-    congestion = _clip01(avg_ratio)  # 0 → هدوء , 1 → ضغط شديد
+    congestion = _clip01(avg_ratio)
     congestion_score = round(100.0 * congestion, 1)
 
-    # انحياز الغاز بالكلمات
     if congestion < 0.3:
         gas_bias = "CALM"
     elif congestion < 0.6:
@@ -162,6 +160,7 @@ def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
 
     return {
         "available": True,
+        "chainid": chainid,           # (اختياري) مفيد للدبغ
         "safe_gwei": safe_gwei,
         "propose_gwei": propose_gwei,
         "fast_gwei": fast_gwei,
@@ -169,7 +168,6 @@ def _eth_gas_snapshot(etherscan_api_key: str) -> Dict[str, Any]:
         "congestion_score": congestion_score,
         "gas_bias": gas_bias,
     }
-
 
 
 # =========================

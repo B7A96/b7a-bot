@@ -212,8 +212,8 @@ def _build_analysis_block(signal_data: Dict[str, Any], mode: str) -> str:
 
     flow = decision.get("flow") or signal_data.get("flow") or {}
     flow_score = flow.get("flow_score")
-    flow_bias = flow.get("flow_bias")
-    flow_state = flow.get("flow_state")
+    flow_bias = flow.get("bias")
+    flow_state = flow.get("state")
 
 
     liquidity_bias = decision.get("liquidity_bias") or signal_data.get("liquidity_bias")

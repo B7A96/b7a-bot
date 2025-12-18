@@ -403,7 +403,7 @@ async def radar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sells = sorted(
         [x for x in data if x["signal"]["decision"]["action"] == "SELL"],
         key=lambda x: float(x["signal"]["decision"]["score"]),
-        reverse=True,
+        reverse=False,
     )[:5]
 
     if buys:
